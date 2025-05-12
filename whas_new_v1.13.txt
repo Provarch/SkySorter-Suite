@@ -1,0 +1,56 @@
+[whats_new]
+SkySorter Suite – Version 1.13
+Formerly known as SkySorter Pro
+
+-------------------------------
+General Changes:
+-------------------------------
+- Renamed the script to "SkySorter Suite" (formerly "SkySorter Pro")
+- Version updated to 1.13
+
+-------------------------------
+UI & Sorting Behavior:
+-------------------------------
+- Added a default sorting type, now set to "Category" by default
+- New optional sorting method: "ID"
+    • Uses the numeric part of each model's ID to determine the folder
+    • Instead of Category\SubCategory, a single folder per ID range is used
+    • Models are split into at most 10 folders, loosely based on release dates
+    • Allows browsing recent models first, then older ones
+- Changed the internal config file name
+    • Users will need to reselect their Raw and SkyBank folders
+    • Alias settings must also be re-entered
+
+-------------------------------
+New Utility: Re-Sorter
+-------------------------------
+- A new tool to reorganize already sorted models in your SkyBank folder
+- Can restructure existing models by Category or ID
+- Does not consume SkySorter’s request limits
+
+-------------------------------
+Skynizer:
+-------------------------------
+- Improved login functionality
+- Users can now log in using a dummy 3dsky account before fixing model names
+- If dummy account details are stored, Skynizer now auto-logins
+
+-------------------------------
+Sky-Lister:
+-------------------------------
+- Now uses a more reliable SkyBank report
+- Report is now tamper-protected
+- This list will become more useful once the upcoming Teams feature is added
+
+-------------------------------
+SkyDrop:
+-------------------------------
+- No major changes
+- Relocated the Picasa installer to a more visible location
+
+-------------------------------
+Updater:
+-------------------------------
+- Now retrieves update packages via GitHub
+- Automatically downloads and installs updates with user confirmation
+[/whats_new]
