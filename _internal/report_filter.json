@@ -1,0 +1,22 @@
+{
+  "suppressed_patterns": [
+    "^📥 Downloaded preview:.*",
+    "^✅ Resaved.*as a clean JPEG\\.$",
+    "^✅ EXIF command executed successfully.*",
+    "^📌 Moved and renamed model_archive to:.*",
+    "^📌 Moved preview image to:.*",
+    "^Received Discord message:.*",
+    "^Attempting to terminate.*",
+    "^Relaying message to TCP client at.*",
+    "^Connection from.*",
+    "^.*[Cc]hannel.*",
+	"^✅ Finished processing source folder.*",
+    "^Logged in as exif.*",
+    "^.*TCP server.*",
+    "^Alias provided:.*",
+	"^.*checking bridge status:.*",
+	"^.*uid:.*",
+    "^Launching: Python with.*",
+    "^✅ Bridge is running and has an assigned channel.*"
+  ]
+}

@@ -39,7 +39,35 @@ class ConfirmExitDialog(QDialog):
         no_button.clicked.connect(self.reject)
         layout.addWidget(no_button)
         self.setLayout(layout)
-
+        
+def read_config(config_path, default_config_path):
+    """Read or create sssuite.cfg, using defaults from default_config.json."""
+    # Load default config from default_config.json
+    try:
+        with open(default_config_path, 'r', encoding='utf-8') as f:
+            default_config = json.load(f)
+    except FileNotFoundError:
+        print(f"Default config not found at {default_config_path}, using empty defaults")
+        default_config = {}
+    except Exception as e:
+        print(f"Error loading default config {default_config_path}: {str(e)}")
+        default_config = {}
+    
+    try:
+        if config_path.exists():
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+            return config
+        else:
+            # Create sssuite.cfg with defaults
+            with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump(default_config, f, indent=4)
+            print(f"Created new {config_path} with default config")
+            return default_config
+    except Exception as e:
+        print(f"Error handling config {config_path}: {str(e)}")
+        return default_config
+    
 class CredentialDialog(QDialog):
     def __init__(self, parent=None, title="Login Credentials", prompt="Enter your 3dsky.org email:"):
         super().__init__(parent)
@@ -242,19 +270,19 @@ class DropWidget(QWidget):
         
         # Quit button
         self.quit_button = QPushButton("Quit", self)
-        self.quit_button.clicked.connect(self.show_quit_dialog)
+        self.quit_button.clicked.connect(lambda: self.show_quit_dialog(show_dialog=False))
         self.quit_button.setFixedHeight(back_width)
         self.quit_button.setToolTip("Quit the application")
         self.quit_button.setStyleSheet("""
             QPushButton { 
-                background-color: rgba(150, 30, 30, 150); 
+                background-color: rgba(100, 30, 30, 150); 
                 color: white; 
                 border: 1px solid #555555; 
                 border-radius: 4px; 
                 padding: 5px; 
             }
             QPushButton:hover { 
-                background-color: rgba(255, 50, 50, 200); 
+                background-color: rgba(200, 50, 50, 200); 
             }
         """)
         self.button_layout.addWidget(self.quit_button)
@@ -318,9 +346,15 @@ class DropWidget(QWidget):
         self.drag_position = None
 
         # Credentials will be loaded or prompted when Login is clicked
-        self.credentials = {"email": "", "password": ""}
-        self.config_path = script_dir / "login.cfg"
-
+        script_dir = Path(__file__).parent
+        self.config_path = script_dir / "sssuite.cfg"
+        self.default_config_path = script_dir / "default_config.json"
+        self.config = read_config(self.config_path, self.default_config_path)
+        
+        # Auto-trigger login if credentials exist
+        if self.config.get("sky_user") and self.config.get("sky_pass"):
+            QTimer.singleShot(0, self.open_login)
+            
         # Apply black theme
         self.setStyleSheet("""
             QWidget { background-color: black; }
@@ -333,15 +367,23 @@ class DropWidget(QWidget):
         # Initial positioning of overlay buttons
         self.update_button_positions()
 
-        # Check for command-line argument for folder path
+        # Check for folder path from command-line argument or sssuite.cfg
+        folder_path = None
         if len(sys.argv) > 1:
             folder_path = sys.argv[1].strip('"')  # Remove quotes if present
             folder_path = Path(folder_path)
-            if folder_path.exists() and folder_path.is_dir():
-                # Defer folder loading until the window is shown
-                QTimer.singleShot(0, lambda: self.load_folder(folder_path))
-            else:
-                self.label.setText(f"Invalid folder path: {folder_path}")
+            if not (folder_path.exists() and folder_path.is_dir()):
+                folder_path = None
+                self.label.setText(f"Invalid folder path from arguments: {folder_path}")
+        if not folder_path:
+            folder_path = self.config.get("3dsky_folder", "")
+            folder_path = Path(folder_path) if folder_path else None
+            if not (folder_path and folder_path.exists() and folder_path.is_dir()):
+                folder_path = None
+                self.label.setText("No valid 3dsky_folder in sssuite.cfg")
+        if folder_path:
+            # Defer folder loading until the window is shown
+            QTimer.singleShot(0, lambda: self.load_folder(folder_path))
         
     # New method to display the previous preview
     def display_prev_preview(self):
@@ -703,6 +745,7 @@ class DropWidget(QWidget):
                     continue  # Skip the new image we're keeping
                 old_preview.unlink()  # Delete the file
                 print(f"Removed old preview: {old_preview}")
+                
     # Modified handle_webpage_element_drop to reset preview index and update buttons
     def handle_webpage_element_drop(self, mime_data):
         html = mime_data.html()
@@ -751,16 +794,6 @@ class DropWidget(QWidget):
             self.rename_files(downloaded_file)
 
         self.display_next_model()
-
-    def generate_uid(self) -> str:
-            """Generate a unique 16-character system identifier based on platform and machine."""
-            system_info = {
-                'platform': platform.system(),
-                'machine': platform.machine(),
-            }
-            combined_info = '-'.join(str(value) for value in system_info.values())
-            hashed_id = hashlib.sha256(combined_info.encode()).hexdigest()
-            return hashed_id[:16]
 
     def combined_hash(self, image_path, model_id=None):
         """
@@ -848,33 +881,25 @@ class DropWidget(QWidget):
         return combined
     
     def load_credentials(self):
-        """Load email and password from login.cfg."""
+        """Load sky_user and sky_pass from config."""
         credentials = {"email": "", "password": ""}
-        try:
-            with open(self.config_path, "r") as f:
-                content = f.read()
-                email_match = re.search(r"email\s*=\s*(.+)", content)
-                password_match = re.search(r"password\s*=\s*(.+)", content)
-                if email_match:
-                    credentials["email"] = email_match.group(1).strip()
-                if password_match:
-                    credentials["password"] = password_match.group(1).strip()
-        except FileNotFoundError:
-            print("login.cfg not found")
-        except Exception as e:
-            print(f"Error reading login.cfg: {e}")
+        credentials["email"] = self.config.get("sky_user", "")
+        credentials["password"] = self.config.get("sky_pass", "")
         return credentials
-
+    
     def save_credentials(self, email, password):
-        """Save email and password to login.cfg."""
+        """Save sky_user and sky_pass to sssuite.cfg."""
         try:
-            with open(self.config_path, "w") as f:
-                f.write(f"email = {email}\n")
-                f.write(f"password = {password}\n")
+            # Update config with new credentials
+            self.config["sky_user"] = email
+            self.config["sky_pass"] = password
+            # Save updated config
+            with open(self.config_path, "w", encoding="utf-8") as f:
+                json.dump(self.config, f, indent=4)
             print(f"Credentials saved to {self.config_path}")
             self.label.setText("Credentials saved successfully")
         except Exception as e:
-            print(f"Error saving login.cfg: {e}")
+            print(f"Error saving sssuite.cfg: {e}")
             self.label.setText(f"Error saving credentials: {e}")
 
     def prompt_credentials(self):
@@ -1241,10 +1266,13 @@ class DropWidget(QWidget):
         except Exception as e:
             self.label.setText(f"Failed to move files: {e}")
 
-    def show_quit_dialog(self):
-        """Show the quit confirmation dialog and close the application if accepted."""
-        dialog = ConfirmExitDialog(self)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
+    def show_quit_dialog(self, show_dialog=True):
+        """Show the quit confirmation dialog if show_dialog is True and close the application if accepted."""
+        if show_dialog:
+            dialog = ConfirmExitDialog(self)
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                self.close()
+        else:
             self.close()
             
     def load_folder(self, folder_path):
@@ -1355,9 +1383,7 @@ class DropWidget(QWidget):
             self.resizing = False
             event.accept()
         elif event.button() == Qt.MouseButton.RightButton:
-            dialog = ConfirmExitDialog(self)
-            if dialog.exec() == QDialog.DialogCode.Accepted:
-                self.close()
+            self.show_quit_dialog(show_dialog=True)
             event.accept()
 
 if __name__ == "__main__":

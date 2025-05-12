@@ -6,6 +6,7 @@ import shutil
 from pathlib import Path
 from typing import List, Optional
 from PIL import Image, UnidentifiedImageError
+import json
 
 # Sky regex for matching model IDs
 sky_regex = re.compile(r'\b(\d{3,8}\.\w{12,13})')
@@ -13,8 +14,8 @@ sky_regex = re.compile(r'\b(\d{3,8}\.\w{12,13})')
 # Supported archive and image extensions
 ARCHIVE_EXTENSIONS = {'.zip', '.rar', '.7z'}
 
-def determine_sorted_folder(sorted_path: str, filename: str) -> str:
-    """Determines the save folder based on the numerical part of the filename."""
+def sort_by_id_folder(sorted_path: str, filename: str) -> str:
+    """Sorts the file into a folder based on the numerical part of the filename (ID-based sorting)."""
     try:
         namenumber = int(filename.split('.')[0])
         if 1 <= namenumber < 20000:
@@ -53,12 +54,13 @@ def determine_sorted_folder(sorted_path: str, filename: str) -> str:
     except ValueError:
         return os.path.join(sorted_path, "Uncategorized")
 
-def process_cmd(exif_cmd: str, source_folder: Path, model_archive: Path, model_previews: List[Path], destination_folder: Path = None, sort_by_id: bool = False) -> tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
+def process_cmd(exif_cmd: str, source_folder: Path, model_archive: Path, model_previews: List[Path], destination_folder: Path = None) -> tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
     """
     Process the exif_cmd: extract valid_id, check for existing preview in destination,
     download preview if not exists, ensure valid JPEG, execute EXIF command with retry,
-    sort into destination_folder based on category or ID, move duplicates to __duplicates,
-    and clean up old previews. Returns (valid_id, valid_prv_path, full_cmd, exif_result).
+    sort into destination_folder based on category or ID (read from sssuite.cfg),
+    move duplicates to __duplicates, and clean up old previews.
+    Returns (valid_id, valid_prv_path, full_cmd, exif_result).
     """
     valid_id = None
     match = sky_regex.search(exif_cmd)
@@ -69,12 +71,33 @@ def process_cmd(exif_cmd: str, source_folder: Path, model_archive: Path, model_p
         print("⚠️ No valid_id found in exif_cmd.")
         return None, None, None, None
 
+    # Load sorting_type from sssuite.cfg
+    script_dir = Path(__file__).parent
+    config_file = script_dir / 'sssuite.cfg'
+    default_config_file = script_dir / 'default_config.json'
+
+    # Load default config
+    default_config = {}
+    if default_config_file.exists():
+        with open(default_config_file, 'r', encoding='utf-8') as f:
+            default_config = json.load(f)
+
+    # Load user config
+    config = default_config.copy()
+    if config_file.exists():
+        with open(config_file, 'r', encoding='utf-8') as f:
+            config.update(json.load(f))
+
+    # Determine sorting type
+    sorting_type = config.get('sorting_type', 'CAT')
+    sort_by_id = (sorting_type == 'ID')
+
     # Determine base folder for sorting (destination_folder if provided, else source_folder)
     base_folder = destination_folder if destination_folder else source_folder
 
     # Determine destination folder for checking duplicates
     if sort_by_id:
-        dest_folder = Path(determine_sorted_folder(str(base_folder), valid_id))
+        dest_folder = Path(sort_by_id_folder(str(base_folder), valid_id))
     else:
         title_match = re.search(r'-XMP:Title="([^"]+)"', exif_cmd)
         if title_match:

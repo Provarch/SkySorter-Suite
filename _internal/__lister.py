@@ -5,6 +5,7 @@ import sys
 from glob import glob
 import hashlib
 import logging
+from collections import defaultdict
 
 # Setup logging to lister.log in the script's directory
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -82,8 +83,9 @@ logger.info(f"Metadata read count at session start: {metadata_read_count}")
 # Regex for extracting actual_id
 sky_regex = r"(\d{2,8}\.\w{12,13})"
 
-# Archive file extensions
-archive_extensions = ['.zip', '.rar', '.7z']  # Ordered preference
+# Archive and image extensions
+archive_extensions = ['.zip', '.rar', '.7z']
+image_extensions = ['.jpg', '.jpeg']
 
 def get_model_id(file_path):
     """Extract model_id from image's XPSubject EXIF tag."""
@@ -110,6 +112,7 @@ def get_model_id(file_path):
         return None
 
 def read_xmp_and_exif_data(file_path):
+    """Read XMP and EXIF metadata from an image."""
     global metadata_read_count
     metadata_read_count += 1
     logger.info(f"Reading metadata from image: {file_path} (Metadata read #{metadata_read_count})")
@@ -165,11 +168,6 @@ def read_xmp_and_exif_data(file_path):
         print(f"Error processing {file_path}: {str(e)}", flush=True)
         return None, None, None
 
-def numeric_sort_key(line):
-    actual_id = line.split(" - ")[0].strip()
-    numeric_part, hex_part = actual_id.split(".", 1)
-    return (int(numeric_part), hex_part)
-
 def verify_existing_report(output_file):
     """Verify the integrity of an existing report file using the hash in [hash_container]."""
     logger.info(f"Verifying report: {output_file}")
@@ -208,57 +206,32 @@ def verify_existing_report(output_file):
             container_content = "".join(container_lines)
             content_bytes = container_content.encode("utf-8")
             computed_hash = hashlib.sha512(content_bytes).hexdigest()
-            logger.debug(f"Container content length: {len(container_content)}, first 100 chars: {container_content[:100].replace('\n', '\\n')}")
             if computed_hash != stored_hash:
                 logger.error(f"Integrity verification failed. Computed Hash: {computed_hash}, Stored Hash: {stored_hash}")
-                print(f"Error: Integrity verification failed for {output_file}. The file may have been tampered with.", flush=True)
-                print(f"Computed Hash: {computed_hash}", flush=True)
-                print(f"Stored Hash: {stored_hash}", flush=True)
-                print(f"Please remove {output_file} and run the script again to generate a new report.", flush=True)
+                print(f"Error: Integrity verification failed for {output_file}.", flush=True)
                 return False
             logger.info(f"Integrity verification passed for {output_file}.")
             print(f"Integrity verification passed for {output_file}.", flush=True)
             return True
         else:
-            logger.warning(f"Missing [container] or [hash_container] in {output_file}. Lines processed: {len(lines)}")
-            logger.debug(f"First few lines: {''.join(lines[:5])[:100].replace('\n', '\\n')}")
-            hash_file = output_file.replace(".txt", ".hash")
-            if os.path.exists(hash_file):
-                with open(output_file, "r", encoding="utf-8") as f:
-                    content = f.read()
-                with open(hash_file, "r", encoding="utf-8") as f:
-                    stored_hash = f.read().strip()
-                content_bytes = content.encode("utf-8")
-                computed_hash = hashlib.sha512(content_bytes).hexdigest()
-                if computed_hash != stored_hash:
-                    logger.error(f"External hash verification failed. Computed Hash: {computed_hash}, Stored Hash: {stored_hash}")
-                    print(f"Error: Integrity verification failed for {output_file} with external hash.", flush=True)
-                    print(f"Computed Hash: {computed_hash}", flush=True)
-                    print(f"Stored Hash: {stored_hash}", flush=True)
-                    print(f"Please remove {output_file} and {hash_file} and run the script again.", flush=True)
-                    return False
-                logger.info(f"Integrity verification passed using external .hash file.")
-                print(f"Integrity verification passed for {output_file}.", flush=True)
-                return True
-            logger.warning(f"No valid hash found. Resuming from partial report.")
-            print(f"Warning: No hash found for {output_file}. Resuming from partial report.", flush=True)
+            logger.warning(f"Missing [container] or [hash_container] in {output_file}.")
             return True
     except Exception as e:
         logger.error(f"Error verifying {output_file}: {str(e)}")
-        print(f"Error verifying {output_file}: {str(e)}. Consider removing {output_file} to start over.", flush=True)
+        print(f"Error verifying {output_file}: {str(e)}.", flush=True)
         return False
 
-def read_existing_report(output_file):
-    """Read existing report file to get processed model IDs and existing models, ignoring containers."""
-    logger.info(f"Reading existing report: {output_file}")
-    processed_model_ids = set()
+def parse_supposed_contents(output_file):
+    """Parse the report to generate supposed_contents with model details."""
+    logger.info(f"Parsing supposed contents from: {output_file}")
+    supposed_contents = []
+    model_id_to_entry = {}
     identifiable_model_ids = set()
-    identifiable_models = []
     unrecognized_models = set()
-    model_id_to_archive = {}
+
     if not os.path.exists(output_file):
         logger.info(f"No existing report found at {output_file}")
-        return processed_model_ids, identifiable_models, list(unrecognized_models), identifiable_model_ids, model_id_to_archive
+        return supposed_contents, model_id_to_entry, identifiable_model_ids, unrecognized_models
 
     current_section = None
     in_container = False
@@ -282,34 +255,33 @@ def read_existing_report(output_file):
             elif line.startswith("Sky-lister results"):
                 continue
             if current_section == "identifiable" and line:
-                parts = line.split(" - ", 2)
-                if len(parts) == 3:
+                parts = line.split(" - ", 3)
+                if len(parts) >= 3:
                     model_id_match = re.search(sky_regex, parts[0])
                     if model_id_match:
                         model_id = model_id_match.group(1)
                         model_type = parts[1].strip()
-                        model_desc = parts[2].strip()
+                        model_desc = parts[2].strip() if len(parts) == 3 else parts[2].strip()
                         desc_parts = [part.strip() for part in model_desc.split("|")]
                         if len(desc_parts) >= 3:
-                            processed_model_ids.add(model_id)
+                            model_name = desc_parts[0]
+                            subcategory = desc_parts[-2]
+                            category = desc_parts[-1]
+                            is_pro = model_type.lower() == "pro"
+                            line_content = f"{parts[0]} - {model_desc}"
+                            entry = {
+                                "model_id": model_id,
+                                "model_name": model_name,
+                                "subcategory": subcategory,
+                                "category": category,
+                                "is_pro": is_pro,
+                                "line": line_content,
+                                "archive_ext": None
+                            }
+                            supposed_contents.append(entry)
+                            model_id_to_entry[model_id] = entry
                             identifiable_model_ids.add(model_id)
-                            is_pro = model_type == "Pro"
-                            identifiable_models.append((f"{parts[0]} - {model_desc}", is_pro))
-                            # Try each archive extension in order
-                            archive_name = None
-                            for ext in archive_extensions:
-                                potential_archive = f"{model_id}{ext}"
-                                # Check if the archive exists in the folder
-                                for root, _, files in os.walk(os.path.dirname(output_file)):
-                                    if potential_archive in files:
-                                        archive_name = potential_archive
-                                        break
-                                if archive_name:
-                                    break
-                            if not archive_name:
-                                archive_name = f"{model_id}.zip"  # Default to .zip if none found
-                            model_id_to_archive[model_id] = archive_name
-                            logger.debug(f"Loaded identifiable model: {model_id} (archive: {archive_name}, desc: {model_desc[:50]}...)")
+                            logger.debug(f"Parsed supposed content: {model_id} ({model_name})")
                         else:
                             logger.warning(f"Skipping identifiable model with incomplete metadata: {line}")
                     else:
@@ -317,51 +289,124 @@ def read_existing_report(output_file):
                 else:
                     logger.warning(f"Skipping malformed identifiable model entry: {line}")
             elif current_section == "unrecognized" and line:
-                if any(line.endswith(ext) or line.endswith(f"{ext} (no accompanying image)") for ext in archive_extensions):
-                    unrecognized_models.add(line)
-                    logger.debug(f"Loaded unrecognized model: {line}")
-                else:
-                    logger.warning(f"Skipping invalid unrecognized model entry: {line}")
+                unrecognized_models.add(line)
+                logger.debug(f"Parsed unrecognized model: {line}")
 
-    logger.info(f"Loaded {len(identifiable_models)} identifiable models, {len(unrecognized_models)} unrecognized models from {output_file}")
-    logger.debug(f"Processed model IDs: {sorted(processed_model_ids)}")
-    logger.debug(f"Identifiable model IDs: {sorted(identifiable_model_ids)}")
-    logger.debug(f"Model ID to archive mapping: {model_id_to_archive}")
-    return processed_model_ids, identifiable_models, list(unrecognized_models), identifiable_model_ids, model_id_to_archive
+    logger.info(f"Parsed {len(supposed_contents)} supposed contents, {len(unrecognized_models)} unrecognized models")
+    return supposed_contents, model_id_to_entry, identifiable_model_ids, unrecognized_models
 
-def write_report(output_file, all_identifiable_models, all_unrecognized_models, folder_name, is_final=False):
+def get_subfolders(source_folder):
+    """Get all subfolders in the source folder, including nested ones."""
+    logger.info(f"Scanning for subfolders in: {source_folder}")
+    subfolders = []
+    for root, dirs, _ in os.walk(source_folder):
+        for dir_name in dirs:
+            subfolder_path = os.path.join(root, dir_name)
+            subfolders.append(subfolder_path)
+    logger.info(f"Found {len(subfolders)} subfolders")
+    return subfolders
+
+def scan_subfolder(subfolder_path, identifiable_model_ids, model_id_to_entry):
+    """Scan a subfolder for actual contents, identifying model names."""
+    logger.info(f"Scanning subfolder: {subfolder_path}")
+    print(f"Scanning subfolder: {subfolder_path}", flush=True)
+    
+    actual_contents = defaultdict(list)
+    files = os.listdir(subfolder_path)
+    logger.debug(f"Found {len(files)} files in {subfolder_path}")
+    
+    for file in files:
+        file_path = os.path.join(subfolder_path, file)
+        if os.path.isfile(file_path):
+            base_name, ext = os.path.splitext(file)
+            ext = ext.lower()
+            if ext in archive_extensions or ext in image_extensions:
+                model_id_match = re.search(sky_regex, base_name)
+                if model_id_match:
+                    model_id = model_id_match.group(1)
+                    actual_contents[model_id].append((file, ext))
+                    logger.debug(f"Found file for model_id {model_id}: {file} ({ext})")
+    
+    new_identifiable_models = []
+    new_unrecognized_models = set()
+    
+    for model_id, files in actual_contents.items():
+        archive_file = None
+        image_file = None
+        for file_name, ext in files:
+            if ext in archive_extensions:
+                archive_file = file_name
+            elif ext in image_extensions:
+                image_file = file_name
+        
+        if archive_file and image_file:
+            if model_id in identifiable_model_ids:
+                logger.info(f"Model {model_id} already in identifiable models, updating archive extension")
+                if model_id in model_id_to_entry:
+                    model_id_to_entry[model_id]["archive_ext"] = os.path.splitext(archive_file)[1]
+                continue
+            image_path = os.path.join(subfolder_path, image_file)
+            logger.info(f"Reading metadata for new model {model_id} from {image_path}")
+            result, is_pro, extracted_model_id = read_xmp_and_exif_data(image_path)
+            if result and extracted_model_id and extracted_model_id == model_id:
+                identifiable_model_ids.add(model_id)
+                desc_parts = [part.strip() for part in result.split("|")]
+                if len(desc_parts) >= 3:
+                    model_name = desc_parts[0]
+                    subcategory = desc_parts[-2]
+                    category = desc_parts[-1]
+                    entry = {
+                        "model_id": model_id,
+                        "model_name": model_name,
+                        "subcategory": subcategory,
+                        "category": category,
+                        "is_pro": is_pro,
+                        "line": result,
+                        "archive_ext": os.path.splitext(archive_file)[1]
+                    }
+                    new_identifiable_models.append(entry)
+                    model_id_to_entry[model_id] = entry
+                    logger.info(f"Added new identifiable model: {model_id} ({model_name})")
+                    print(f"Added new identifiable model: {model_id} from {archive_file}", flush=True)
+            else:
+                new_unrecognized_models.add(archive_file)
+                logger.info(f"Marked as unrecognized: {archive_file}")
+        elif archive_file:
+            new_unrecognized_models.add(archive_file + " (no accompanying image)")
+            logger.info(f"Marked as unrecognized (no image): {archive_file}")
+    
+    return new_identifiable_models, new_unrecognized_models
+
+def write_report(output_file, identifiable_models, unrecognized_models, folder_name):
     """Write the report file with entries in [container] and hash in [hash_container]."""
     logger.info(f"Writing report to {output_file}")
-    all_identifiable_models.sort(key=lambda x: numeric_sort_key(x[0]))
-    pro_count = sum(1 for _, is_pro in all_identifiable_models if is_pro)
-    free_count = len(all_identifiable_models) - pro_count
-    total_identifiable = len(all_identifiable_models)
-    total_unrecognized = len(all_unrecognized_models)
+    identifiable_models.sort(key=numeric_sort_key)
+    pro_count = sum(1 for model in identifiable_models if model["is_pro"])
+    free_count = len(identifiable_models) - pro_count
+    total_identifiable = len(identifiable_models)
+    total_unrecognized = len(unrecognized_models)
 
     lines = []
     header = (
         f"Sky-lister results: {total_identifiable} Identifiable "
         f"({pro_count} Pro and {free_count} FREE), "
-        f"{total_unrecognized} Unrecognized/Non-Sky models in {folder_name}"
+        f"{total_unrecognized} Unrecognized/Non-Sky models in {folder_name}\n\n"
     )
-    if not is_final:
-        header += " (Partial Report)"
-    header += "\n\n"
     lines.append(header)
     lines.append("Identifiable Sky Models:\n")
-    for model, is_pro in all_identifiable_models:
-        model_type = "Pro" if is_pro else "FREE"
-        model_id, model_desc = model.split(" - ", 1)
+    for model in identifiable_models:
+        model_type = "Pro" if model["is_pro"] else "FREE"
+        model_id = model["line"].split(" - ")[0].strip()
+        model_desc = model["line"].split(" - ")[1].strip()
         lines.append(f"{model_id} - {model_type: <4} - {model_desc}\n")
     lines.append("\nUnrecognized Sky Models (or missing image):\n")
-    for model in all_unrecognized_models:
+    for model in sorted(unrecognized_models):
         lines.append(model + "\n")
 
     container_content = "".join(lines)
     content_bytes = container_content.encode("utf-8")
     integrity_hash = hashlib.sha512(content_bytes).hexdigest()
     logger.info(f"Computed SHA-512 hash for container content: {integrity_hash}")
-    logger.debug(f"Container content length: {len(container_content)}, first 100 chars: {container_content[:100].replace('\n', '\\n')}")
 
     with open(output_file, "w", encoding="utf-8", newline="\n") as f:
         f.write("[container]\n")
@@ -370,81 +415,20 @@ def write_report(output_file, all_identifiable_models, all_unrecognized_models, 
         f.write("[hash_container]\n")
         f.write(integrity_hash + "\n")
         f.write("[/hash_container]\n")
-    logger.info(f"Report written to {output_file} with container and hash_container")
+    logger.info(f"Report written to {output_file}")
 
-def process_folder(folder_path, source_folder, processed_model_ids, all_identifiable_models, all_unrecognized_models, output_file, folder_name, identifiable_model_ids, current_archives, model_id_to_archive):
-    """Process a single folder: find archives, check model_id, and read metadata if needed."""
-    logger.info(f"Scanning folder: {folder_path}")
-    print(f"Scanning folder: {folder_path}", flush=True)
-    
-    archive_files = []
-    new_identifiable_models = []
-    new_unrecognized_models = set()
-    
-    for file in os.listdir(folder_path):
-        file_path = os.path.join(folder_path, file)
-        if os.path.isfile(file_path) and any(file.lower().endswith(ext) for ext in archive_extensions):
-            archive_files.append(file_path)
-            archive_basename = os.path.basename(file_path)
-            logger.debug(f"Added archive to current_archives: {archive_basename} (extension: {os.path.splitext(file_path)[1]})")
-            current_archives.add(archive_basename)
-    
-    logger.debug(f"Found {len(archive_files)} archives in {folder_path}: {[os.path.basename(p) for p in archive_files]}")
-    
-    for archive_path in archive_files:
-        archive_basename = os.path.basename(archive_path)
-        logger.info(f"Processing archive: {archive_path}")
-        
-        model_id = None
-        for mid, arch in model_id_to_archive.items():
-            if arch == archive_basename:
-                model_id = mid
-                break
-        
-        if model_id and model_id in processed_model_ids:
-            logger.info(f"Skipping archive {archive_basename} via model_id_to_archive with model_id {model_id}: already processed")
-            print(f"Skipping already processed model_id {model_id} for archive: {archive_basename}", flush=True)
-            continue
-        
-        base_name = os.path.splitext(archive_path)[0]
-        jpg_pattern = f"{base_name}.jpg"
-        jpeg_pattern = f"{base_name}.jpeg"
-        matching_images = glob(jpg_pattern) + glob(jpeg_pattern)
-        logger.info(f"Found {len(matching_images)} matching images for {archive_path}: {matching_images}")
-        
-        if matching_images:
-            first_image = sorted(matching_images)[0]
-            logger.info(f"Processing archive: {archive_basename} (image: {first_image})")
-            extracted_model_id = get_model_id(first_image)
-            if extracted_model_id and extracted_model_id in identifiable_model_ids:
-                logger.info(f"Skipping metadata read for {archive_basename}: model_id {extracted_model_id} already processed")
-                print(f"Skipping already processed model_id {extracted_model_id} for archive: {archive_basename}", flush=True)
-                continue
-            logger.info(f"Performing new metadata read for {archive_basename} (image: {first_image})")
-            result, is_pro, extracted_model_id = read_xmp_and_exif_data(first_image)
-            if result and extracted_model_id and extracted_model_id not in identifiable_model_ids:
-                identifiable_model_ids.add(extracted_model_id)
-                new_identifiable_models.append((result, is_pro))
-                model_id_to_archive[extracted_model_id] = archive_basename
-                logger.info(f"Added new identifiable model: {result} (model_id: {extracted_model_id})")
-                print(f"Added new identifiable model: {extracted_model_id} from {archive_basename}", flush=True)
-            elif not result:
-                new_unrecognized_models.add(archive_basename)
-                logger.info(f"Marked as unrecognized: {archive_basename}")
-        else:
-            new_unrecognized_models.add(archive_basename + " (no accompanying image)")
-            logger.info(f"Marked as unrecognized (no image): {archive_basename}")
-    
-    all_identifiable_models.extend(new_identifiable_models)
-    all_unrecognized_models.extend([model for model in new_unrecognized_models if model not in set(all_unrecognized_models)])
-    
-    write_report(output_file, all_identifiable_models, all_unrecognized_models, folder_name)
-    
-    logger.info(f"Finished processing folder: {folder_path}")
-    print(f"Finished processing folder: {folder_path}", flush=True)
-    return new_identifiable_models, new_unrecognized_models
+def numeric_sort_key(entry):
+    """Sort key for model lines based on numeric and hex parts of model_id."""
+    if isinstance(entry, dict):
+        line = entry["line"]
+    else:
+        line = entry  # Handle old string format for backward compatibility
+    actual_id = line.split(" - ")[0].strip()
+    numeric_part, hex_part = actual_id.split(".", 1)
+    return (int(numeric_part), hex_part)
 
 def generate_report(source_folder):
+    """Generate a report by comparing supposed and actual folder contents."""
     logger.info(f"Starting report generation for source folder: {source_folder}")
     if not os.path.isdir(source_folder):
         logger.error(f"Invalid directory: {source_folder}")
@@ -460,72 +444,43 @@ def generate_report(source_folder):
         print(f"Aborting report generation due to integrity verification failure.", flush=True)
         sys.exit(1)
 
-    processed_model_ids, all_identifiable_models, all_unrecognized_models, identifiable_model_ids, model_id_to_archive = read_existing_report(output_file)
+    supposed_contents, model_id_to_entry, identifiable_model_ids, unrecognized_models = parse_supposed_contents(output_file)
 
-    current_archives = set()
+    subfolders = get_subfolders(source_folder)
 
-    process_folder(source_folder, source_folder, processed_model_ids, all_identifiable_models, all_unrecognized_models, output_file, folder_name, identifiable_model_ids, current_archives, model_id_to_archive)
+    all_identifiable_models = supposed_contents.copy()
+    all_unrecognized_models = set(unrecognized_models)
+    removed_models = []
 
-    for root, dirs, _ in os.walk(source_folder):
-        if root == source_folder:
-            continue
-        process_folder(root, source_folder, processed_model_ids, all_identifiable_models, all_unrecognized_models, output_file, folder_name, identifiable_model_ids, current_archives, model_id_to_archive)
+    for subfolder in subfolders:
+        new_identifiable, new_unrecognized = scan_subfolder(subfolder, identifiable_model_ids, model_id_to_entry)
+        all_identifiable_models.extend(new_identifiable)
+        all_unrecognized_models.update(new_unrecognized)
 
-    logger.debug(f"Current archives found in scan: {sorted(current_archives)}")
-    logger.debug(f"Model ID to archive mapping: {model_id_to_archive}")
+    subfolder_models = set()
+    for subfolder in subfolders:
+        files = os.listdir(subfolder)
+        for file in files:
+            base_name = os.path.splitext(file)[0]
+            model_id_match = re.search(sky_regex, base_name)
+            if model_id_match:
+                subfolder_models.add(model_id_match.group(1))
 
     filtered_identifiable_models = []
-    removed_identifiable_models = []
-    for model, is_pro in all_identifiable_models:
-        model_id = model.split(" - ")[0].strip()
-        archive_name = model_id_to_archive.get(model_id)
-        if not archive_name:
-            logger.warning(f"No archive mapped for model_id: {model_id}")
-            removed_identifiable_models.append(f"{model_id} (no archive)")
-            continue
-        archive_path = None
-        possible_archives = [f"{model_id}{ext}" for ext in archive_extensions]
-        for potential_archive in possible_archives:
-            for root, _, files in os.walk(source_folder):
-                if potential_archive in files:
-                    archive_path = os.path.join(root, potential_archive)
-                    break
-            if archive_path:
-                archive_name = potential_archive
-                break
-        if archive_path and archive_name in current_archives:
-            filtered_identifiable_models.append((model, is_pro))
-            logger.debug(f"Kept identifiable model: {model_id} (archive: {archive_name})")
+    for model in all_identifiable_models:
+        if model["model_id"] in subfolder_models:
+            filtered_identifiable_models.append(model)
         else:
-            removed_identifiable_models.append(f"{model_id} (archive: {archive_name}, path: {archive_path or 'not found'})")
-            logger.info(f"Removed identifiable model: {model_id} (archive: {archive_name}, path: {archive_path or 'not found'}, tried: {possible_archives})")
+            removed_models.append(model["model_id"])
+            logger.info(f"Removed model {model['model_id']} (not found in subfolders)")
+            print(f"Removed model {model['model_id']} (not found in subfolders)", flush=True)
 
-    filtered_unrecognized_models = []
-    removed_unrecognized_models = []
-    for model in all_unrecognized_models:
-        archive_name = model.split(" (")[0]
-        archive_path = None
-        for root, _, files in os.walk(source_folder):
-            if archive_name in files:
-                archive_path = os.path.join(root, archive_name)
-                break
-        if archive_path and archive_name in current_archives:
-            filtered_unrecognized_models.append(model)
-            logger.debug(f"Kept unrecognized model: {model}")
-        else:
-            removed_unrecognized_models.append(model)
-            logger.info(f"Removed unrecognized model: {model} (path: {archive_path or 'not found'})")
-
-    if removed_identifiable_models:
-        logger.info(f"Removed {len(removed_identifiable_models)} identifiable models: {removed_identifiable_models}")
-        print(f"Removed {len(removed_identifiable_models)} identifiable models no longer in folder: {removed_identifiable_models}", flush=True)
-    if removed_unrecognized_models:
-        logger.info(f"Removed {len(removed_unrecognized_models)} unrecognized models: {removed_unrecognized_models}")
-        print(f"Removed {len(removed_unrecognized_models)} unrecognized models no longer in folder: {removed_unrecognized_models}", flush=True)
-
-    write_report(output_file, filtered_identifiable_models, filtered_unrecognized_models, folder_name, is_final=True)
+    write_report(output_file, filtered_identifiable_models, all_unrecognized_models, folder_name)
     logger.info(f"Report generation complete: {output_file}")
     print(f"Report generation complete: {output_file}", flush=True)
+    if removed_models:
+        logger.info(f"Removed {len(removed_models)} models: {removed_models}")
+        print(f"Removed {len(removed_models)} models: {removed_models}", flush=True)
 
 if __name__ == "__main__":
     logger.info("Script started")

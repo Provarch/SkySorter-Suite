@@ -15,15 +15,15 @@ logger = logging.getLogger(__name__)
 class UsageButton(QPushButton):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedSize(85, 85)
+        self.setFixedSize(110, 110)
         self.is_hovered = False
         self.current = 0
         self.total = 0
         self.renewal_date = None
-        self.config_file = Path(os.path.dirname(os.path.abspath(__file__))) / 'usage_data.json'
+        self.main_window = parent
         
         # Load saved usage data
-        self.load_usage_data()
+        self.load_usage_data()  # Call the corrected method
         
         # Set initial text based on loaded or default values
         total_str = f"{self.total // 1000}K" if self.total >= 1000 else str(self.total)
@@ -49,48 +49,73 @@ class UsageButton(QPushButton):
             }}
         """)
         
-        # Force circular appearance with mask
         self.setMask(self.roundedRect(self.rect(), 42))
-        
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setToolTip("<b>Usage Limit</b><br>Enjoy your monthly free 400 request limit \n if you are collector \n Click to purchase additional request limits\n Be sure to use them up in 30-days.")
         self.clicked.connect(self.open_url)
-
-        # Add glow effect
         self.glow_effect = QGraphicsDropShadowEffect()
-        self.glow_effect.setColor(QColor(255, 255, 255))  # Initial white glow for 0/0
-        self.glow_effect.setBlurRadius(11)
+        self.glow_effect.setColor(QColor(255, 255, 255))
+        self.glow_effect.setBlurRadius(25)
         self.glow_effect.setOffset(0)
         self.setGraphicsEffect(self.glow_effect)
         self.glow_effect.setEnabled(True)
-
         self.enterEvent = self.on_enter
         self.leaveEvent = self.on_leave
 
     def load_usage_data(self):
-        """Load usage data from a JSON file."""
+        """Load usage data from MainWindow's config."""
         try:
-            if self.config_file.exists():
-                with open(self.config_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    self.current = data.get('current', 0)
-                    self.total = data.get('total', 0)
-                    self.renewal_date = data.get('renewal_date', None)
-                    logger.debug(f"Loaded usage data: current={self.current}, total={self.total}, renewal={self.renewal_date}")
+            if hasattr(self.main_window, 'config') and self.main_window.config:
+                self.current = self.main_window.config.get('current', 0)
+                self.total = self.main_window.config.get('total', 0)
+                self.renewal_date = self.main_window.config.get('renewal_date', None)
+                logger.debug(f"Loaded usage data: current={self.current}, total={self.total}, renewal={self.renewal_date}")
+            else:
+                logger.debug("No config available in MainWindow, using defaults")
         except Exception as e:
             logger.error(f"Error loading usage data: {e}")
 
-    def save_usage_data(self):
-        """Save usage data to a JSON file."""
+    def load_config(self):
+        """Load configuration from sssuite.cfg, using default_config.json as the baseline."""
+        default_config = {}
         try:
-            data = {
-                'current': self.current,
-                'total': self.total,
-                'renewal_date': self.renewal_date
-            }
-            with open(self.config_file, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=4)
-            logger.debug(f"Saved usage data: {data}")
+            if self.default_config_file.exists():
+                with open(self.default_config_file, 'r', encoding='utf-8') as f:
+                    default_config = json.load(f)
+                    logger.debug(f"Loaded default_config from {self.default_config_file}: {default_config}")
+            else:
+                self.console_output.append(f"Warning: default_config.json not found at {self.default_config_file}")
+                print(f"Warning: default_config.json not found at {self.default_config_file}")
+        except Exception as e:
+            self.console_output.append(f"Error loading default_config.json: {e}")
+            print(f"Error loading default_config.json: {e}")
+            logger.error(f"Error loading default_config.json: {e}")
+
+        try:
+            if self.config_file.exists():
+                with open(self.config_file, 'r', encoding='utf-8') as f:
+                    loaded_config = json.load(f)
+                    self.config = {**default_config, **loaded_config}
+                    logger.debug(f"Loaded and merged config from {self.config_file}: {self.config}")
+            else:
+                self.console_output.append(f"Warning: Config file not found at {self.config_file}")
+                print(f"Warning: Config file not found at {self.config_file}")
+                self.config = default_config
+        except Exception as e:
+            self.console_output.append(f"Error loading config: {e}")
+            print(f"Error loading config: {e}")
+            logger.error(f"Error loading config: {e}")
+    def save_usage_data(self):
+        """Save usage data to MainWindow's config."""
+        try:
+            if hasattr(self.main_window, 'config'):
+                self.main_window.config.update({
+                    'current': self.current,
+                    'total': self.total,
+                    'renewal_date': self.renewal_date
+                })
+                self.main_window.save_config()
+                logger.debug(f"Saved usage data: current={self.current}, total={self.total}, renewal={self.renewal_date}")
         except Exception as e:
             logger.error(f"Error saving usage data: {e}")
 
@@ -151,6 +176,7 @@ class UsageButton(QPushButton):
                     self.total = new_total
                     self.renewal_date = renewal if renewal else self.renewal_date
                     logger.debug(f"Renewal date parsed: {self.renewal_date}")
+                    self.save_usage_data()  # Save to sssuite.cfg
                 else:
                     logger.debug("Parsing failed, retaining previous values")
             else:
@@ -175,6 +201,7 @@ class UsageButton(QPushButton):
             else:
                 self.current = current
                 self.total = total if total is not None else 0
+                self.save_usage_data()  # Save to sssuite.cfg
         
         if self.total is None or self.total < 0:
             self.total = 0

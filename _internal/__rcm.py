@@ -67,7 +67,7 @@ def quit_with_confirmation(event, window, check_thread, stop_event, filters):
     # Picasa button functionality
     def on_picasa():
         picasa_path = r"C:\Program Files (x86)\Google\Picasa3\Picasa3.exe"
-        installer_path = os.path.join(os.path.dirname(__file__), "picasa-3-9-141-259.exe")
+        installer_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "picasa-3-9-141-259.exe")
         
         if os.path.exists(picasa_path):
             os.startfile(picasa_path)

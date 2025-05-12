@@ -1,5 +1,5 @@
 from PyQt6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QToolButton, QToolTip, QLineEdit
-from PyQt6.QtCore import Qt, QTimer, QPoint
+from PyQt6.QtCore import Qt, QTimer, QPoint, QThread, pyqtSignal  # Added QThread and pyqtSignal
 import webbrowser
 from pathlib import Path
 import platform
@@ -7,16 +7,21 @@ import uuid
 import hashlib
 import subprocess
 import sys
+import json
+import os
 
 
 class ToolsDropdown(QWidget):
-    def __init__(self, parent=None, gfx_dir=None, main_window=None, button_set=None):
+    def __init__(self, parent=None, gfx_dir=None, main_window=None, button_set=None, x_offset=0, y_offset=0, button_width=90):
         super().__init__(parent)
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.gfx_dir = gfx_dir
         self.main_window = main_window
         self.button_set = button_set  # Reference to ButtonSet
+        self.x_offset = x_offset  # Horizontal offset in pixels
+        self.y_offset = y_offset  # Vertical offset in pixels
+        self.button_width = button_width  # Width for all buttons in pixels
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -25,7 +30,7 @@ class ToolsDropdown(QWidget):
         # Skydrop button
         skydrop_button = QToolButton()
         skydrop_button.setText("DROP")
-        skydrop_button.setFixedWidth(90)
+        skydrop_button.setFixedWidth(self.button_width)
         skydrop_button.setStyleSheet("""
             QToolButton { 
                 background-color: rgba(30, 30, 30, 200); 
@@ -43,11 +48,10 @@ class ToolsDropdown(QWidget):
         skydrop_button.clicked.connect(lambda: [self.launch_skydrop(), self.button_set.toggle_dropdown()])
         layout.addWidget(skydrop_button)
 
-        
         # Skynizer button
         skynizer_button = QToolButton()
         skynizer_button.setText("NIZER")
-        skynizer_button.setFixedWidth(90)
+        skynizer_button.setFixedWidth(self.button_width)
         skynizer_button.setStyleSheet("""
             QToolButton { 
                 background-color: rgba(30, 30, 30, 200); 
@@ -65,12 +69,10 @@ class ToolsDropdown(QWidget):
         skynizer_button.clicked.connect(lambda: [self.launch_skynizer(), self.button_set.toggle_dropdown()])
         layout.addWidget(skynizer_button)
 
-
-
         # Skylister button
         skylister_button = QToolButton()
         skylister_button.setText("LISTER")
-        skylister_button.setFixedWidth(90)
+        skylister_button.setFixedWidth(self.button_width)
         skylister_button.setStyleSheet("""
             QToolButton { 
                 background-color: rgba(30, 30, 30, 200); 
@@ -88,10 +90,34 @@ class ToolsDropdown(QWidget):
         skylister_button.clicked.connect(lambda: [self.main_window.run_skylister(), self.button_set.toggle_dropdown()])
         layout.addWidget(skylister_button)
 
+
+
+        # Resorter button
+        resorter_button = QToolButton()
+        resorter_button.setText("RE-SORTER")
+        resorter_button.setFixedWidth(self.button_width)
+        resorter_button.setStyleSheet("""
+            QToolButton { 
+                background-color: rgba(30, 30, 30, 200); 
+                color: white; 
+                padding: 5px; 
+                border-radius: 4px; 
+                border: none; 
+                text-align: center; 
+            }
+            QToolButton:hover { 
+                background-color: rgba(77, 77, 77, 200); 
+            }
+        """)
+        resorter_button.setToolTip("<b>Resorter</b><br>Re-sort models in the 3D Sky bank")
+        resorter_button.clicked.connect(lambda: [self.launch_resorter(), self.button_set.toggle_dropdown()])
+        layout.addWidget(resorter_button)
+
+
         # Updates button
         updates_button = QToolButton()
         updates_button.setText("UPDATE")
-        updates_button.setFixedWidth(90)
+        updates_button.setFixedWidth(self.button_width)
         updates_button.setStyleSheet("""
             QToolButton { 
                 background-color: rgba(30, 30, 30, 200); 
@@ -108,6 +134,41 @@ class ToolsDropdown(QWidget):
         updates_button.setToolTip("<b>Updates</b><br>Check for skySorter updates")
         updates_button.clicked.connect(lambda: [self.launch_checker(updates_button), self.button_set.toggle_dropdown()])
         layout.addWidget(updates_button)
+
+        
+    class ResorterThread(QThread):
+        output_signal = pyqtSignal(str)  # Signal to emit output lines
+
+        def __init__(self, executable, script_path, sky_folder):
+            super().__init__()
+            self.executable = executable
+            self.script_path = script_path
+            self.sky_folder = sky_folder
+
+        def run(self):
+            try:
+                args = [self.executable, str(self.script_path), self.sky_folder]
+                process = subprocess.Popen(
+                    args,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,  # Combine stderr with stdout
+                    text=True,
+                    bufsize=1,  # Line buffering
+                    universal_newlines=True
+                )
+
+                # Stream output line by line
+                for line in iter(process.stdout.readline, ''):
+                    if line:
+                        self.output_signal.emit(line.strip())
+                
+                process.stdout.close()
+                return_code = process.wait()
+                if return_code != 0:
+                    self.output_signal.emit(f"Resorter exited with return code {return_code}")
+            except Exception as e:
+                self.output_signal.emit(f"Error launching Resorter: {str(e)}")
 
     def launch_skynizer(self):
         skynizer_script = self.gfx_dir.parent / "__skyNizer.pyw"
@@ -158,6 +219,117 @@ class ToolsDropdown(QWidget):
             print(error_msg, flush=True)
             if self.main_window and hasattr(self.main_window, 'console_output'):
                 self.main_window.console_output.append(error_msg)
+                
+    def launch_resorter(self):
+        # Path to resorter script
+        resorter_script = self.gfx_dir.parent / "__resorter.py"
+        if not resorter_script.exists():
+            error_msg = f"Resorter script not found at {resorter_script}"
+            print(error_msg, flush=True)
+            if self.main_window and hasattr(self.main_window, 'console_output'):
+                self.main_window.console_output.append(error_msg)
+            return
+        
+        # Read sssuite.cfg for 3dsky_folder and sorting_type
+        script_dir = Path(__file__).parent
+        config_path = script_dir / "sssuite.cfg"
+        default_config_path = script_dir / "default_config.json"
+
+        # Load default config
+        default_config = {}
+        try:
+            if default_config_path.exists():
+                with open(default_config_path, 'r', encoding='utf-8') as f:
+                    default_config = json.load(f)
+            else:
+                print(f"Default config not found at {default_config_path}, using empty defaults", flush=True)
+        except Exception as e:
+            error_msg = f"Error loading default config {default_config_path}: {str(e)}"
+            print(error_msg, flush=True)
+            if self.main_window and hasattr(self.main_window, 'console_output'):
+                self.main_window.console_output.append(error_msg)
+            return
+
+        # Load user config
+        config = default_config.copy()
+        try:
+            if config_path.exists():
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config.update(json.load(f))
+            else:
+                print(f"Config file not found at {config_path}, using defaults", flush=True)
+        except Exception as e:
+            error_msg = f"Error loading config {config_path}: {str(e)}"
+            print(error_msg, flush=True)
+            if self.main_window and hasattr(self.main_window, 'console_output'):
+                self.main_window.console_output.append(error_msg)
+            return
+
+        # Get 3dsky_folder and sorting_type
+        sky_folder = config.get('3dsky_folder', '')
+        sorting_type = config.get('sorting_type', 'CAT')
+        if not sky_folder:
+            error_msg = "3dsky_folder not specified in sssuite.cfg"
+            print(error_msg, flush=True)
+            if self.main_window and hasattr(self.main_window, 'console_output'):
+                self.main_window.console_output.append(error_msg)
+            return
+        if not Path(sky_folder).is_dir():
+            error_msg = f"3dsky_folder is not a valid directory: {sky_folder}"
+            print(error_msg, flush=True)
+            if self.main_window and hasattr(self.main_window, 'console_output'):
+                self.main_window.console_output.append(error_msg)
+            return
+
+        # Check if the Sky bank folder is large or on a mechanical drive
+        file_count = sum(len(files) for _, _, files in os.walk(sky_folder))
+        is_mechanical = False
+        if platform.system() == 'Windows':
+            import win32file
+            drive = os.path.splitdrive(sky_folder)[0] + '\\'
+            drive_type = win32file.GetDriveType(drive)
+            is_mechanical = drive_type == win32file.DRIVE_FIXED  # Excludes SSDs or network drives
+
+        LARGE_THRESHOLD = 100  # Adjust this threshold as needed
+        if file_count > LARGE_THRESHOLD or is_mechanical:
+            from PyQt6.QtWidgets import QMessageBox
+            msg_box = QMessageBox(self.main_window)
+            msg_box.setWindowTitle("Warning")
+            msg_box.setText("Re-sorting a large Sky bank folder or using a mechanical hard drive may take a significant amount of time.")
+            msg_box.setInformativeText("Do you want to continue?")
+            msg_box.setStandardButtons(QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Ok)
+            msg_box.setDefaultButton(QMessageBox.StandardButton.Cancel)
+            result = msg_box.exec()
+            if result == QMessageBox.StandardButton.Cancel:
+                print("Re-sorter cancelled by user", flush=True)
+                if self.main_window and hasattr(self.main_window, 'console_output'):
+                    self.main_window.console_output.append("Re-sorter cancelled by user")
+                return
+
+        # Log the attempt to the UI console
+        attempt_msg = f"Launching resorter with folder: {sky_folder} and sorting_type: {sorting_type}"
+        print(attempt_msg, flush=True)
+        if self.main_window and hasattr(self.main_window, 'console_output'):
+            self.main_window.console_output.append(attempt_msg)
+
+        # Launch resorter in a separate thread
+        self.resorter_thread = self.ResorterThread(sys.executable, resorter_script, sky_folder)
+        self.resorter_thread.output_signal.connect(self.append_to_console)
+        self.resorter_thread.finished.connect(lambda: print("Resorter thread finished", flush=True))
+        self.resorter_thread.start()
+
+    def append_to_console(self, text):
+        """Append text to the UI console."""
+        if self.main_window and hasattr(self.main_window, 'console_output'):
+            self.main_window.console_output.append(text)
+        print(text, flush=True)  # Also print to terminal for debugging
+
+    def append_to_console(self, text):
+        """Append text to the UI console."""
+        if self.main_window and hasattr(self.main_window, 'console_output'):
+            self.main_window.console_output.append(text)
+        print(text, flush=True)  # Also print to terminal for debugging
+                
                 
     def show_at_position(self, position):
         self.move(position)
@@ -242,7 +414,7 @@ class ButtonSet(QWidget):
 
         # Tools button
         self.tools_button = QToolButton()
-        self.tools_button.setText("SKY...")
+        self.tools_button.setText("SKY-")
         self.tools_button.setFixedWidth(80)
         self.tools_button.setStyleSheet("""
             QToolButton { 
@@ -261,10 +433,11 @@ class ButtonSet(QWidget):
         self.tools_button.clicked.connect(self.toggle_dropdown)
         button_layout.addWidget(self.tools_button)
 
-        # Create the dropdown widget
-        self.tools_dropdown = ToolsDropdown(None, self.gfx_dir, self.main_window, button_set=self)
-        self.tools_dropdown.setWindowFlags(self.tools_dropdown.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
 
+        # Create the dropdown widget with initial offset values and button width
+        self.tools_dropdown = ToolsDropdown(None, self.gfx_dir, self.main_window, button_set=self, x_offset=10, y_offset=5, button_width=80)
+        self.tools_dropdown.setWindowFlags(self.tools_dropdown.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
+        
         main_layout.addStretch(1)
         main_layout.addWidget(button_container)
 
@@ -291,8 +464,11 @@ class ButtonSet(QWidget):
 
     def update_dropdown_position(self):
         if self.tools_button:
-            button_pos = self.tools_button.mapToGlobal(QPoint(0, 0))
-            dropdown_pos = QPoint(button_pos.x(), button_pos.y() + self.tools_button.height())
+            button_pos = self.tools_button.mapToGlobal(QPoint(50, -34))
+            dropdown_pos = QPoint(
+                button_pos.x() + self.tools_dropdown.x_offset,
+                button_pos.y() + self.tools_button.height() + self.tools_dropdown.y_offset
+            )
             self.tools_dropdown.move(dropdown_pos)
             if self.dropdown_visible:
                 self.tools_dropdown.show()

@@ -1,0 +1,12 @@
+[Sun May 11 11:31:27 2025] Unhandled NameError: name 'QToolButton' is not defined
+  File "R:\!_PYTHON\__SkySorterPro\sspro_v\_internal\__ui_definitions.py", line 819, in mousePressEvent
+    if not widget or not any(isinstance(widget, t) for t in (QPushButton, QToolButton, QLineEdit, QTextEdit)):
+                                                                          ^^^^^^^^^^^
+[Sun May 11 11:33:25 2025] Unhandled NameError: name 'QLineEdit' is not defined
+  File "R:\!_PYTHON\__SkySorterPro\sspro_v\_internal\__ui_definitions.py", line 819, in mousePressEvent
+    if not widget or not any(isinstance(widget, t) for t in (QPushButton, QToolButton, QLineEdit, QTextEdit)):
+                                                                                       ^^^^^^^^^
+[Sun May 11 11:34:23 2025] Unhandled NameError: name 'QLineEdit' is not defined
+  File "R:\!_PYTHON\__SkySorterPro\sspro_v\_internal\__ui_definitions.py", line 819, in mousePressEvent
+    if not widget or not any(isinstance(widget, t) for t in (QPushButton, QToolButton, QLineEdit, QTextEdit)):
+                                                                                       ^^^^^^^^^

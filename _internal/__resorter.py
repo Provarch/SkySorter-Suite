@@ -5,6 +5,7 @@ import re
 from glob import glob
 from shutil import move, rmtree
 from PIL import Image
+from pathlib import Path
 
 # Regex for extracting actual_id
 sky_regex = r"(\d{2,8}\.\w{12,13})"
@@ -12,36 +13,26 @@ sky_regex = r"(\d{2,8}\.\w{12,13})"
 # Archive file extensions
 archive_extensions = {'.zip', '.rar', '.7z'}
 
-def read_config(config_path):
-    """Read or create sorter.cfg with default sorting type."""
-    default_config = {
-        "3dsky_folder": "",
-        "process_models_path": "",
-        "alias": "",
-        "user_uid": "",
-        "sorting_type": "ID"
-    }
+def read_config(config_path, default_config_path):
+    """Read or create sssuite.cfg, using defaults from default_config.json."""
+    # Load default config from default_config.json
+    try:
+        with open(default_config_path, 'r', encoding='utf-8') as f:
+            default_config = json.load(f)
+    except FileNotFoundError:
+        print(f"Default config not found at {default_config_path}, using empty defaults", flush=True)
+        default_config = {}
+    except Exception as e:
+        print(f"Error loading default config {default_config_path}: {str(e)}", flush=True)
+        default_config = {}
     
     try:
         if os.path.exists(config_path):
             with open(config_path, 'r', encoding='utf-8') as f:
                 config = json.load(f)
-            # Ensure sorting_type exists
-            updated = False
-            if "sorting_type" not in config:
-                config["sorting_type"] = "ID"
-                updated = True
-            # Write back to file if updated
-            if updated:
-                try:
-                    with open(config_path, 'w', encoding='utf-8') as f:
-                        json.dump(config, f, indent=4)
-                    print(f"Updated {config_path} with sorting_type: ID", flush=True)
-                except Exception as write_error:
-                    print(f"Failed to update {config_path}: {str(write_error)}", flush=True)
             return config
         else:
-            # Create default config
+            # Create sssuite.cfg with defaults
             with open(config_path, 'w', encoding='utf-8') as f:
                 json.dump(default_config, f, indent=4)
             print(f"Created new {config_path} with default config", flush=True)
@@ -324,17 +315,25 @@ def delete_empty_if_no_files(source_folder, base_folder):
             except Exception as e:
                 print(f"Error deleting {os.path.basename(folder)} folder {folder}: {str(e)}", flush=True)
 
-def main(source_folder="R:\\!_DL_Workshop\\!_Daily3d", dest_folder=None):
+def main(source_folder, dest_folder=None):
     """Main function to re-sort model archives and previews within the source or destination folder."""
     # Read config
-    config_path = os.path.join(os.path.dirname(__file__), "sorter.cfg")
-    config = read_config(config_path)
-    sorting_type = config.get("sorting_type", "ID")
+    script_dir = Path(__file__).parent
+    config_path = script_dir / "sssuite.cfg"
+    default_config_path = script_dir / "default_config.json"
+    config = read_config(config_path, default_config_path)
+    sorting_type = config.get("sorting_type", "CAT")
     print(f"Using sorting type: {sorting_type}", flush=True)
+    
+    # Validate source_folder
+    if not source_folder or not os.path.exists(source_folder):
+        print(f"Error: Source folder '{source_folder}' does not exist", flush=True)
+        sys.exit(1)
+    print(f"Using source folder: {source_folder}", flush=True)
     
     # Set base folder for sorting (dest_folder if provided, else source_folder)
     base_folder = dest_folder if dest_folder else source_folder
-    print(f"\nSorting from source: {source_folder} to base: {base_folder}", flush=True)
+    print(f"Using base folder: {base_folder}", flush=True)
     
     # Define duplicates folder path in source_folder (create only when needed)
     duplicates_folder = os.path.join(source_folder, "__duplicates")
@@ -394,15 +393,12 @@ def main(source_folder="R:\\!_DL_Workshop\\!_Daily3d", dest_folder=None):
 
 if __name__ == "__main__":
     print("Starting re-sorter...", flush=True)
-    if len(sys.argv) == 1:
-        # No arguments: use default source_folder, no dest_folder
-        main()
-    elif len(sys.argv) == 2:
-        # One argument: use default source_folder, provided dest_folder
-        main(dest_folder=sys.argv[1].strip())
+    if len(sys.argv) == 2:
+        # One argument: source_folder only
+        main(source_folder=sys.argv[1].strip())
     elif len(sys.argv) == 3:
-        # Two arguments: use provided source_folder and dest_folder
+        # Two arguments: source_folder and dest_folder
         main(source_folder=sys.argv[1].strip(), dest_folder=sys.argv[2].strip())
     else:
-        print("Usage: __re-sorter.py [[source_folder] [dest_folder]]", flush=True)
+        print("Usage: __re-sorter.py <source_folder> [dest_folder]", flush=True)
         sys.exit(1)
