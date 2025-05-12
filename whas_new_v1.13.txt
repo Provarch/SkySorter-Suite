@@ -1,21 +1,18 @@
 [whats_new]
 SkySorter Suite – Version 1.13
-Formerly known as SkySorter Pro
+(Keeps changing...Formerly known as SkySorter Pro)
 
 -------------------------------
 General Changes:
 -------------------------------
-- Renamed the script to "SkySorter Suite" (formerly "SkySorter Pro")
+- Renamed the script to "SkySorter Suite" 
 - Version updated to 1.13
 - Various internal optimizations... that cause previous config file not being used anymore.
 Having a central ui for recalls would benefit on the long run. Users might have to re-enter
-user details like "Alias", "folder paths". APart from that, nothing affecting the previous usage.
+user details like "Alias", "folder paths". A part from that, nothing affecting the previous usage.
 - The updater now self downloads and extracts like any modern updater should.
 
--------------------------------
-SEE IT ACTION
-https://youtu.be/8xYhKv1t4Hw
--------------------------------
+
 -------------------------------
 UI & Sorting Behavior:
 -------------------------------
