@@ -7,7 +7,15 @@ General Changes:
 -------------------------------
 - Renamed the script to "SkySorter Suite" (formerly "SkySorter Pro")
 - Version updated to 1.13
+- Various internal optimizations... that cause previous config file not being used anymore.
+Having a central ui for recalls would benefit on the long run. Users might have to re-enter
+user details like "Alias", "folder paths". APart from that, nothing affecting the previous usage.
+- The updater now self downloads and extracts like any modern updater should.
 
+-------------------------------
+SEE IT ACTION
+https://youtu.be/8xYhKv1t4Hw
+-------------------------------
 -------------------------------
 UI & Sorting Behavior:
 -------------------------------
@@ -26,7 +34,7 @@ New Utility: Re-Sorter
 -------------------------------
 - A new tool to reorganize already sorted models in your SkyBank folder
 - Can restructure existing models by Category or ID
-- Does not consume SkySorter’s request limits
+- Does not consume SkySorter’s request limits. It basically reads
 
 -------------------------------
 Skynizer:
