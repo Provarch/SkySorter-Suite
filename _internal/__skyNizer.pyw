@@ -1,24 +1,36 @@
-import os
-os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = "--disable-gpu --disable-software-rasterizer"
-from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, 
-                             QPushButton, QLabel, QDialog, QSizePolicy, QSizeGrip, QInputDialog, QLineEdit, QFileDialog)
-from PyQt6.QtCore import Qt, QUrl, QSize, QTimer
-from PyQt6.QtGui import QPixmap, QIcon
-from PyQt6.QtWebEngineWidgets import QWebEngineView
-import sys
-import re
-import requests
-import time
-import subprocess
-import shutil
-from urllib.parse import urlparse, quote
+from PyQt6.QtWidgets import QMainWindow, QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFileDialog, QTextEdit, QApplication, QToolButton, QLineEdit
+from PyQt6.QtGui import QIcon, QPixmap
+from PyQt6.QtCore import Qt, QProcess, QProcessEnvironment, QTimer
 from pathlib import Path
-import hashlib
-from PIL import Image
-import imagehash
+import os
 import json
-import platform
-import webbrowser
+import logging
+import re
+import time
+import socket
+import sys
+import ctypes
+from ctypes import wintypes
+from __ui_widgets import DragDropLineEdit, find_app_icon, get_main_stylesheet
+from __button_set import ButtonSet
+from __usage_button import UsageButton
+from __ui_layout import setup_top_section, setup_middle_section, setup_process_widget, setup_console
+import threading
+
+import sys
+import threading
+import queue
+from filelock import FileLock, Timeout
+import time
+
+logger = logging.getLogger(__name__)
+def exception_hook(exctype, value, traceback):
+    logger.error('Unhandled exception', exc_info=(exctype, value, traceback))
+    with open('skysorter_crash.log', 'a', encoding='utf-8') as f:
+        import traceback as tb
+        f.write(f"[{time.ctime()}] Unhandled {exctype.__name__}: {value}\n")
+        tb.print_tb(traceback, file=f)
+    sys.__excepthook__(exctype, value, traceback)
 
 class ConfirmExitDialog(QDialog):
     def __init__(self, parent=None):
@@ -39,1355 +51,682 @@ class ConfirmExitDialog(QDialog):
         no_button.clicked.connect(self.reject)
         layout.addWidget(no_button)
         self.setLayout(layout)
-        
-def read_config(config_path, default_config_path):
-    """Read or create sssuite.cfg, using defaults from default_config.json."""
-    # Load default config from default_config.json
-    try:
-        with open(default_config_path, 'r', encoding='utf-8') as f:
-            default_config = json.load(f)
-    except FileNotFoundError:
-        print(f"Default config not found at {default_config_path}, using empty defaults")
-        default_config = {}
-    except Exception as e:
-        print(f"Error loading default config {default_config_path}: {str(e)}")
-        default_config = {}
-    
-    try:
-        if config_path.exists():
-            with open(config_path, 'r', encoding='utf-8') as f:
-                config = json.load(f)
-            return config
-        else:
-            # Create sssuite.cfg with defaults
-            with open(config_path, 'w', encoding='utf-8') as f:
-                json.dump(default_config, f, indent=4)
-            print(f"Created new {config_path} with default config")
-            return default_config
-    except Exception as e:
-        print(f"Error handling config {config_path}: {str(e)}")
-        return default_config
-    
-class CredentialDialog(QDialog):
-    def __init__(self, parent=None, title="Login Credentials", prompt="Enter your 3dsky.org email:"):
-        super().__init__(parent)
-        self.setWindowFlags(self.windowFlags() | Qt.WindowType.FramelessWindowHint)
-        self.setStyleSheet("""
-            QWidget { background-color: black; }
-            QLabel { color: white; }
-            QPushButton { 
-                background-color: rgba(61, 61, 61, 200); 
-                color: white; 
-                border: 1px solid #555555; 
-                border-radius: 4px; 
-                padding: 5px; 
-            }
-            QPushButton:hover { 
-                background-color: rgba(77, 77, 77, 200); 
-            }
-            QPushButton:disabled { 
-                background-color: rgba(40, 40, 40, 200); 
-                color: #777777; 
-            }
-            QWebEngineView { background-color: black; }
-            
-            /* Special styling for Thrash button */
-            QPushButton#thrash_button { 
-                background-color: #883333;  /* Darker red in normal state */
-            }
-            QPushButton#thrash_button:hover { 
-                background-color: #AA5555;  /* Lighter red on hover */
-            }
-        """)
-        layout = QVBoxLayout(self)
-        self.label = QLabel(prompt)
-        layout.addWidget(self.label)
-        self.input_field = QLineEdit(self)
-        if "password" in prompt.lower():
-            self.input_field.setEchoMode(QLineEdit.EchoMode.Password)
-        layout.addWidget(self.input_field)
-        button_layout = QHBoxLayout()
-        ok_button = QPushButton("OK")
-        ok_button.clicked.connect(self.accept)
-        button_layout.addWidget(ok_button)
-        cancel_button = QPushButton("Cancel")
-        cancel_button.clicked.connect(self.reject)
-        button_layout.addWidget(cancel_button)
-        layout.addLayout(button_layout)
-        self.setLayout(layout)
 
-    def get_text(self):
-        return self.input_field.text()
+class MainWindow(QMainWindow):
+    def moveEvent(self, event):
+        super().moveEvent(event)
+        if hasattr(self, 'button_set'):
+            self.button_set.update_dropdown_position()
 
-class DropWidget(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
-
-        # Define sky_regex to match model_id format (e.g., "5353361.6486e31087722.zip")
-        self.sky_regex = re.compile(r'^\d{4,8}\.[0-9a-fA-F]{12,13}\.(zip|rar|7z)$')
-
-        # Main layout (vertical)
-        self.main_layout = QVBoxLayout()
-
-        # Horizontal layout for content
-        self.content_layout = QHBoxLayout()
-
-        # Image container widget for overlay (this will hold the image and buttons)
-        self.image_container_widget = QWidget(self)
-        self.image_container_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.image_container_widget.setMinimumSize(100, 100)
-        self.image_container_widget.setMaximumSize(460, 460)
-
-        # Vertical layout for the image label (restores original sizing behavior)
-        image_container = QVBoxLayout(self.image_container_widget)
-
-        # Image label (inside the layout for proper sizing)
-        self.image_label = QLabel(self.image_container_widget)
-        self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.image_label.setMaximumSize(460, 460)
-        self.image_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.image_label.setMinimumSize(100, 100)
-        image_container.addWidget(self.image_label)
-
-        # Previous preview button (overlayed on left)
-        self.prev_preview_button = QPushButton("<", self.image_container_widget)
-        self.prev_preview_button.clicked.connect(self.display_prev_preview)
-        self.prev_preview_button.setEnabled(False)
-        self.prev_preview_button.setToolTip("Previous preview image")
-        self.prev_preview_button.setFixedSize(30, 30)
-        self.prev_preview_button.setStyleSheet("QPushButton { background-color: rgba(0, 0, 0, 150); color: white; border: none; } QPushButton:hover { background-color: rgba(100, 100, 100, 150); }")
-
-        # Next preview button (overlayed on right)
-        self.next_preview_button = QPushButton(">", self.image_container_widget)
-        self.next_preview_button.clicked.connect(self.display_next_preview)
-        self.next_preview_button.setEnabled(False)
-        self.next_preview_button.setToolTip("Next preview image")
-        self.next_preview_button.setFixedSize(30, 30)
-        self.next_preview_button.setStyleSheet("QPushButton { background-color: rgba(0, 0, 0, 150); color: white; border: none; } QPushButton:hover { background-color: rgba(100, 100, 100, 150); }")
-
-        # Add image container widget to content layout (left)
-        self.content_layout.addWidget(self.image_container_widget, stretch=1)
-
-        # Vertical layout for buttons (middle)
-        self.button_layout = QVBoxLayout()
-        self.button_layout.addStretch()
-
-        script_dir = Path(__file__).parent
-
-        # Provarch button
-        self.provarch_button = QPushButton(self)
-        self.provarch_button.clicked.connect(self.open_provarch)
-        provarch_icon_path = script_dir / "_gfx" / "prov_logo_v3.png"
-        if provarch_icon_path.exists():
-            self.provarch_button.setIcon(QIcon(str(provarch_icon_path)))
-            self.provarch_button.setIconSize(QSize(60, 60))
-        self.provarch_button.setFixedSize(70, 70)
-        self.provarch_button.setToolTip("Visit Provarch on Patreon")
-        self.button_layout.addWidget(self.provarch_button)
-
-        # YouTube and Discord buttons
-        youtube_discord_layout = QHBoxLayout()
-        self.youtube_button = QPushButton(self)
-        self.youtube_button.clicked.connect(self.open_youtube)
-        youtube_icon_path = script_dir / "_gfx" / "yt_logo.png"
-        if youtube_icon_path.exists():
-            self.youtube_button.setIcon(QIcon(str(youtube_icon_path)))
-            self.youtube_button.setIconSize(QSize(20, 20))
-        self.youtube_button.setFixedSize(25, 25)
-        self.youtube_button.setToolTip("Visit Provarch on YouTube")
-        youtube_discord_layout.addWidget(self.youtube_button)
-
-        self.discord_button = QPushButton(self)
-        self.discord_button.clicked.connect(self.open_discord)
-        discord_icon_path = script_dir / "_gfx" / "dis_logo+.png"
-        if discord_icon_path.exists():
-            self.discord_button.setIcon(QIcon(str(discord_icon_path)))
-            self.discord_button.setIconSize(QSize(20, 20))
-        self.discord_button.setFixedSize(25, 25)
-        self.discord_button.setToolTip("Join the Provarch Discord community")
-        youtube_discord_layout.addWidget(self.discord_button)
-        self.button_layout.addLayout(youtube_discord_layout)
-
-        # Tutorial button
-        self.tutorial_button = QPushButton("Tuto", self)
-        self.tutorial_button.clicked.connect(self.open_tutorial)
-        self.tutorial_button.setToolTip("Watch the SkyMatcher tutorial on YouTube")
-        self.button_layout.addWidget(self.tutorial_button)
-
-        # Login button
-        self.login_button = QPushButton("Login", self)
-        self.login_button.clicked.connect(self.open_login)
-        self.login_button.setToolTip("Login to 3dsky.org (auto-fills credentials and keeps them strictly local)")
-        self.button_layout.addWidget(self.login_button)
-
-        # Check button
-        self.check_button = QPushButton("Check", self)
-        self.check_button.clicked.connect(self.open_archive)
-        self.check_button.setEnabled(False)
-        self.check_button.setToolTip("Open the current model's archive")
-        self.button_layout.addWidget(self.check_button)
-
-        # Browse button
-        self.browse_button = QPushButton("Browse", self)
-        self.browse_button.clicked.connect(self.open_folder)
-        self.browse_button.setToolTip("Select a folder or open current folder")
-        self.button_layout.addWidget(self.browse_button)
-
-        # Back button
-        self.back_button = QPushButton("Back", self)
-        self.back_button.clicked.connect(self.go_back)
-        self.back_button.setEnabled(False)
-        self.back_button.setToolTip("Go to the previous model archive")
-        back_width = self.back_button.sizeHint().width()
-        self.back_button.setFixedHeight(back_width)
-        self.button_layout.addWidget(self.back_button)
-
-        # Next button
-        self.next_button = QPushButton("Next", self)
-        self.next_button.clicked.connect(self.display_next_model)
-        self.next_button.setEnabled(False)
-        self.next_button.setToolTip("Go to the next model archive")
-        next_width = self.next_button.sizeHint().width()
-        self.next_button.setFixedHeight(next_width)
-        self.button_layout.addWidget(self.next_button)
-
-        # Non button
-        self.non_button = QPushButton("Non", self)
-        self.non_button.clicked.connect(self.move_to_non_sky)
-        self.non_button.setFixedHeight(back_width)
-        self.non_button.setEnabled(False)
-        self.non_button.setToolTip("Move to __non-sky folder")
-        self.button_layout.addWidget(self.non_button)
-
-        # Thrash button
-        self.thrash_button = QPushButton("Thrash", self)
-        self.thrash_button.clicked.connect(self.move_to_thrash)
-        self.thrash_button.setFixedHeight(back_width)
-        self.thrash_button.setEnabled(False)
-        self.thrash_button.setToolTip("Move to __thrash folder")
-        self.button_layout.addWidget(self.thrash_button)
+        self.PADDING_OUTER = 5
+        self.PADDING_INNER = 5
         
-        # Quit button
-        self.quit_button = QPushButton("Quit", self)
-        self.quit_button.clicked.connect(lambda: self.show_quit_dialog(show_dialog=False))
-        self.quit_button.setFixedHeight(back_width)
-        self.quit_button.setToolTip("Quit the application")
-        self.quit_button.setStyleSheet("""
-            QPushButton { 
-                background-color: rgba(100, 30, 30, 150); 
-                color: white; 
-                border: 1px solid #555555; 
-                border-radius: 4px; 
-                padding: 5px; 
-            }
-            QPushButton:hover { 
-                background-color: rgba(200, 50, 50, 200); 
-            }
+        self.app_dir = Path(os.path.dirname(os.path.abspath(__file__)))
+        print(f"Running as script from {self.app_dir}")
+        self.user_uid = None
+        self.current_usage = 0
+        self.total_usage = 0
+        
+        icon_path = find_app_icon(self.app_dir)
+        if icon_path:
+            self.setWindowIcon(QIcon(str(icon_path)))
+            print(f"Set window icon to: {icon_path}")
+        
+        self.internal_dir = self.app_dir
+        self.config_file = self.internal_dir / 'sssuite.cfg'
+        self.default_config_file = self.app_dir / 'default_config.json'
+        self.report_filter_file = self.app_dir / 'report_filter.json'
+        
+        self.load_config()
+        self.load_report_filters()
+        
+        self.gfx_dir = None
+        possible_gfx_paths = [
+            self.app_dir / '_gfx',
+            self.internal_dir / '_gfx',
+            self.internal_dir / '_internal' / '_gfx',
+        ]
+        for path in possible_gfx_paths:
+            if path.exists():
+                self.gfx_dir = path
+                print(f"Found graphics directory at: {self.gfx_dir}")
+                break
+        if self.gfx_dir is None:
+            print("WARNING: Could not find graphics directory!")
+            self.gfx_dir = self.app_dir / '_gfx'
+        
+        print(f"Internal directory: {self.internal_dir}")
+        print(f"Config file path: {self.config_file}")
+        print(f"Graphics directory: {self.gfx_dir}")
+        
+        self.sky_sorter_script = self.internal_dir / "__client.py"
+        self.skylister_script = self.internal_dir / "__lister.py"
+        
+        self.setWindowTitle("skySorter")
+        self.setMinimumSize(680, 800)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
+        
+        main_widget = QWidget()
+        self.setCentralWidget(main_widget)
+        main_layout = QVBoxLayout(main_widget)
+        main_layout.setContentsMargins(self.PADDING_OUTER, self.PADDING_OUTER, self.PADDING_OUTER, 0)
+        main_layout.setSpacing(self.PADDING_INNER)
+        
+        content_widget = QWidget(main_widget)
+        content_layout = QVBoxLayout(content_widget)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(0)
+        self.central_widget = content_widget
+        
+        background_label = QLabel(content_widget)
+        bg_path = self.gfx_dir / "bg_toolkit.png"
+        pixmap = QPixmap(str(bg_path))
+        scaled_pixmap = pixmap.scaled(700, 700, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        x = (690 - scaled_pixmap.width()) // 2
+        y = (583 - scaled_pixmap.height()) // 2
+        background_label.setGeometry(x, y, scaled_pixmap.width(), scaled_pixmap.height())
+        background_label.setPixmap(scaled_pixmap)
+        background_label.lower()
+        
+        title_bar = QWidget()
+        title_bar_layout = QHBoxLayout(title_bar)
+        title_bar.setStyleSheet("QWidget { background-color: #1e1e1e; color: white; }")
+        title_label = QLabel("skySorter")
+        title_label.setStyleSheet("padding: 5px;")
+        close_button = QPushButton("×")
+        minimize_button = QPushButton("−")
+        close_button.clicked.connect(self.close)
+        minimize_button.clicked.connect(self.showMinimized)
+        title_bar_layout.addWidget(title_label)
+        title_bar_layout.addStretch()
+        title_bar_layout.addWidget(minimize_button)
+        title_bar_layout.addWidget(close_button)
+        
+        self.usage_button = UsageButton(self)
+        
+        top_section = setup_top_section(self, self.app_dir)
+        middle_section = setup_middle_section(self, self.app_dir)
+        process_widget = setup_process_widget(self)
+        console_container = setup_console(self)
+        
+        hero_container = QWidget()
+        hero_layout = QVBoxLayout(hero_container)
+        hero_layout.setContentsMargins(0, 0, 0, 0)
+        hero_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        process_hover_button = QPushButton("Process Folders")
+        process_hover_button.setFixedSize(100, 40)
+        process_hover_button.setStyleSheet("""
+            QPushButton { background-color: rgba(255, 255, 255, 0.1); color: white; border: 2px solid rgba(255, 255, 255, 0.7); border-radius: 20px; padding: 5px; }
+            QPushButton:hover { background-color: rgba(255, 255, 255, 0.2); border: 2px solid white; }
         """)
-        self.button_layout.addWidget(self.quit_button)
-
-        self.button_layout.addStretch()
-        self.button_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        # Web view for displaying 3dsky.org (right)
-        self.web_view = QWebEngineView()
-        self.web_view.setUrl(QUrl("https://3dsky.org"))
-        self.web_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.web_view.setMinimumSize(400, 300)
-
-        # Add to content layout
-        self.content_layout.addLayout(self.button_layout)
-        self.content_layout.addWidget(self.web_view, stretch=1)
-
-        # Add content layout to main layout
-        self.main_layout.addLayout(self.content_layout, stretch=1)
-
-        # Status label and resize grip
-        self.label = QLabel("Drag an archive file or image here", self)
-        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.resize_grip = QSizeGrip(self)
-        self.resize_grip.setFixedSize(20, 20)
-        self.resize_grip.setStyleSheet("QSizeGrip { background-color: #FF5555; border: 1px solid white; }")
-
-        bottom_layout = QHBoxLayout()
-        bottom_layout.addStretch()
-        bottom_layout.addWidget(self.label)
-        bottom_layout.addStretch()
-        bottom_layout.addWidget(self.resize_grip, alignment=Qt.AlignmentFlag.AlignRight)
-        self.main_layout.addLayout(bottom_layout)
-        self.setLayout(self.main_layout)
-
-        # Set initial size and center window
-        self.setMinimumSize(1200, 680)
-        screen = QApplication.primaryScreen().geometry()
-        x = (screen.width() - self.width()) // 2
-        y = (screen.height() - self.height()) // 2
-        self.move(x, y)
-
-        # Enable drag and drop
-        self.setAcceptDrops(True)
-
-        # Store state
-        self.last_archive_path = None
-        self.model_name = None
-        self.preview_files = []
-        self.main_preview = None
-        self.current_image_path = None
-        self.url_history = ["https://3dsky.org"]
-        self.current_index = 0
-        self.model_list = []
-        self.current_model_index = -1
-        self.current_preview_index = 0  # Track current preview
-
-        # Dragging and resizing state
+        process_hover_button.hide()
+        hero_container.enterEvent = lambda event: process_hover_button.show()
+        hero_container.leaveEvent = lambda event: process_hover_button.hide()
+        process_hover_button.enterEvent = lambda event: process_hover_button.show()
+        process_hover_button.leaveEvent = lambda event: process_hover_button.hide()
+        process_hover_button.clicked.connect(self.run_sky_sorter)
+        hero_layout.addWidget(process_hover_button)
+        
+        bottom_container = QWidget()
+        bottom_layout = QVBoxLayout(bottom_container)
+        bottom_layout.setContentsMargins(0, 0, 0, 0)
+        bottom_layout.setSpacing(5)
+        bottom_layout.addWidget(process_widget)
+        bottom_layout.addLayout(console_container)
+        
+        content_layout.addWidget(top_section, 0)
+        content_layout.addWidget(middle_section, 0)
+        content_layout.addWidget(hero_container, 0, Qt.AlignmentFlag.AlignCenter)
+        content_layout.addStretch(1)
+        content_layout.addWidget(bottom_container, 0)
+        
+        top_section.raise_()
+        content_widget.raise_()
+        
+        main_layout.addWidget(content_widget, 1)
+        
+        self.setStyleSheet(get_main_stylesheet())
+        
+        self.process = QProcess()
+        self.process.setProcessChannelMode(QProcess.ProcessChannelMode.SeparateChannels)
+        process_env = QProcessEnvironment.systemEnvironment()
+        process_env.insert("PYTHONUNBUFFERED", "1")
+        process_env.insert("PYTHONIOENCODINGHITHOUT", "utf-8")
+        process_env.insert("PYTHONUTF8", "1")
+        self.process.setProcessEnvironment(process_env)
+        
+        self.process.readyReadStandardOutput.connect(self.handle_stdout)
+        self.process.readyReadStandardError.connect(self.handle_stderr)
+        self.process.finished.connect(self.process_finished)
+        
+        self.apply_saved_config()
+        
+        self.folder_input1.textChanged.connect(self.save_config)
+        self.process_input.textChanged.connect(self.save_config)
+        
         self.dragging = False
-        self.resizing = False
         self.drag_position = None
 
-        # Credentials will be loaded or prompted when Login is clicked
-        script_dir = Path(__file__).parent
-        self.config_path = script_dir / "sssuite.cfg"
-        self.default_config_path = script_dir / "default_config.json"
-        self.config = read_config(self.config_path, self.default_config_path)
-        
-        # Auto-trigger login if credentials exist
-        if self.config.get("sky_user") and self.config.get("sky_pass"):
-            QTimer.singleShot(0, self.open_login)
+    def load_report_filters(self):
+        """Load report filter patterns from report_filter.json and compile them as regex."""
+        self.suppressed_patterns = []
+        try:
+            if self.report_filter_file.exists():
+                with open(self.report_filter_file, 'r', encoding='utf-8') as f:
+                    filter_data = json.load(f)
+                    patterns = filter_data.get('suppressed_patterns', [])
+                    # Compile patterns as regex for efficient matching
+                    self.suppressed_patterns = [re.compile(pattern) for pattern in patterns]
+                    logger.debug(f"Loaded and compiled report filters from {self.report_filter_file}: {patterns}")
+            else:
+                logger.warning(f"Report filter file not found at {self.report_filter_file}")
+                print(f"Warning: Report filter file not found at {self.report_filter_file}")
+        except Exception as e:
+            logger.error(f"Error loading report filters: {str(e)}")
+            print(f"Error loading report filters: {str(e)}")
+            self.console_output.append(f"Error loading report filters: {str(e)}")
+
+
+    def load_config(self):
+        """Load configuration from sssuite.cfg, using default_config.json as the baseline."""
+        default_config = {}
+        try:
+            if self.default_config_file.exists():
+                with open(self.default_config_file, 'r', encoding='utf-8') as f:
+                    default_config = json.load(f)
+                    logger.debug(f"Loaded default_config from {self.default_config_file}: {default_config}")
+            else:
+                print(f"Warning: default_config.json not found at {self.default_config_file}")
+                logger.warning(f"Warning: default_config.json not found at {self.default_config_file}")
+        except Exception as e:
+            print(f"Error loading default_config.json: {e}")
+            logger.error(f"Error loading default_config.json: {e}")
+
+        try:
+            if self.config_file.exists():
+                with open(self.config_file, 'r', encoding='utf-8') as f:
+                    loaded_config = json.load(f)
+                    self.config = {**default_config, **loaded_config}
+                    logger.debug(f"Loaded and merged config from {self.config_file}: {self.config}")
+            else:
+                print(f"Warning: Config file not found at {self.config_file}")
+                logger.warning(f"Warning: Config file not found at {self.config_file}")
+                self.config = default_config
+                self.save_config()
+        except Exception as e:
+            print(f"Error loading config: {e}")
+            logger.error(f"Error loading config: {e}")
+            self.config = default_config
+            self.save_config()
+
+    def save_config(self):
+        """Save configuration to sssuite.cfg with debouncing and file locking."""
+        logger.debug("Requesting save_config")
+        try:
+            if not hasattr(self, '_save_config_timer'):
+                self._save_config_timer = QTimer(self)
+                self._save_config_timer.setSingleShot(True)
+                self._save_config_timer.timeout.connect(self._execute_save_config)
             
-        # Apply black theme
-        self.setStyleSheet("""
-            QWidget { background-color: black; }
-            QLabel { color: white; }
-            QPushButton { background-color: rgba(61, 61, 61, 200); color: white; border: 1px solid #555555; border-radius: 4px; padding: 5px; }
-            QPushButton:hover { background-color: rgba(77, 77, 77, 200); }
-            QWebEngineView { background-color: black; }
-        """)
+            # Debounce: Delay save_config by 500ms
+            if not self._save_config_timer.isActive():
+                self._save_config_timer.start(500)
+            else:
+                logger.debug("save_config debounced, waiting for timer")
+        except Exception as e:
+            logger.error(f"Error initiating save_config: {str(e)}\n{traceback.format_exc()}")
+            self.console_output.append(f"Error initiating config save: {str(e)}")
 
-        # Initial positioning of overlay buttons
-        self.update_button_positions()
+    def _execute_save_config(self):
+        """Execute config save with file locking."""
+        logger.debug("Executing save_config")
+        try:
+            config_data = {
+                '3dsky_folder': self.config.get('3dsky_folder', '') if not hasattr(self, 'folder_input1') else self.folder_input1.text(),
+                'process_models_path': self.config.get('process_models_path', '') if not hasattr(self, 'process_input') else self.process_input.text(),
+                'alias': self.config.get('alias', '') if not hasattr(self, 'button_set') else self.button_set.get_alias(),
+                'user_uid': self.user_uid if self.user_uid else '',
+                'current': self.config.get('current', 0) if not hasattr(self, 'usage_button') else getattr(self.usage_button, 'current', 0),
+                'total': self.config.get('total', 0) if not hasattr(self, 'usage_button') else getattr(self.usage_button, 'total', 0),
+                'renewal_date': self.config.get('renewal_date', '') if not hasattr(self, 'usage_button') else (getattr(self.usage_button, 'renewal_date', '') or '')
+            }
+            
+            full_config = self.config.copy()
+            full_config.update(config_data)
+            
+            self.internal_dir.mkdir(parents=True, exist_ok=True)
+            lock_file = self.config_file.with_suffix('.cfg.lock')
+            
+            with FileLock(lock_file, timeout=5):
+                temp_file = self.config_file.with_suffix('.cfg.tmp')
+                with open(temp_file, 'w', encoding='utf-8') as f:
+                    json.dump(full_config, f, indent=4)
+                if self.config_file.exists():
+                    self.config_file.unlink()
+                temp_file.rename(self.config_file)
+            
+            logger.debug(f"Saved config to {self.config_file}")
+        except Exception as e:
+            logger.error(f"Error saving config: {str(e)}\n{traceback.format_exc()}")
+            self.console_output.append(f"Error saving config: {str(e)}")
 
-        # Check for folder path from command-line argument or sssuite.cfg
-        folder_path = None
-        if len(sys.argv) > 1:
-            folder_path = sys.argv[1].strip('"')  # Remove quotes if present
-            folder_path = Path(folder_path)
-            if not (folder_path.exists() and folder_path.is_dir()):
-                folder_path = None
-                self.label.setText(f"Invalid folder path from arguments: {folder_path}")
-        if not folder_path:
-            folder_path = self.config.get("3dsky_folder", "")
-            folder_path = Path(folder_path) if folder_path else None
-            if not (folder_path and folder_path.exists() and folder_path.is_dir()):
-                folder_path = None
-                self.label.setText("No valid 3dsky_folder in sssuite.cfg")
-        if folder_path:
-            # Defer folder loading until the window is shown
-            QTimer.singleShot(0, lambda: self.load_folder(folder_path))
-        
-    # New method to display the previous preview
-    def display_prev_preview(self):
-        if not self.preview_files or len(self.preview_files) <= 1:
-            return
-        self.current_preview_index = (self.current_preview_index - 1) % len(self.preview_files)
-        self.display_image(self.preview_files[self.current_preview_index])
-        self.update_preview_buttons()
+    def apply_saved_config(self):
+        """Apply saved configuration to UI elements."""
+        logger.debug("Applying saved configuration")
+        try:
+            if hasattr(self, 'config'):
+                if hasattr(self, 'folder_input1'):
+                    self.folder_input1.setText(self.config.get('3dsky_folder', ''))
+                if hasattr(self, 'process_input'):
+                    self.process_input.setText(self.config.get('process_models_path', ''))
+                if hasattr(self, 'button_set'):
+                    self.button_set.set_alias(self.config.get('alias', ''))
+                if self.config.get('user_uid', ''):
+                    self.user_uid = self.config['user_uid']
+                    if hasattr(self, 'button_set'):
+                        self.button_set.update_uid(self.user_uid)
+                if hasattr(self, 'usage_button') and 'current' in self.config and 'total' in self.config:
+                    self.current_usage = self.config.get('current', 0)
+                    self.total_usage = self.config.get('total', 0)
+                    self.usage_button.current = self.current_usage
+                    self.usage_button.total = self.total_usage
+                    renewal_date = self.config.get('renewal_date', '')
+                    self.usage_button.renewal_date = renewal_date if renewal_date else None
+                    total_str = f"{self.total_usage // 1000}K" if self.total_usage >= 1000 else str(self.total_usage)
+                    self.usage_button.setText(
+                        f"{self.current_usage}/{total_str}\n{renewal_date}".strip()
+                    )
+                    self.usage_button.update_glow_based_on_usage()
+        except Exception as e:
+            logger.error(f"Error applying config: {str(e)}\n{traceback.format_exc()}")
+            self.console_output.append(f"Error applying config: {str(e)}")
 
-    # New method to display the next preview
-    def display_next_preview(self):
-        if not self.preview_files or len(self.preview_files) <= 1:
-            return
-        self.current_preview_index = (self.current_preview_index + 1) % len(self.preview_files)
-        self.display_image(self.preview_files[self.current_preview_index])
-        self.update_preview_buttons()
+    def select_3dsky_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, "Select 3dsky Folder", self.config.get('3dsky_folder', ''))
+        if folder:
+            self.folder_input1.setText(folder)
+            self.save_config()
 
-    # New method to update the state of preview buttons
-    def update_preview_buttons(self):
-        has_multiple_previews = len(self.preview_files) > 1
-        self.prev_preview_button.setEnabled(has_multiple_previews)
-        self.next_preview_button.setEnabled(has_multiple_previews)
-        self.prev_preview_button.setVisible(has_multiple_previews)
-        self.next_preview_button.setVisible(has_multiple_previews)
+    def select_process_path(self):
+        folder = QFileDialog.getExistingDirectory(self, "Select Process Models Path", self.config.get('process_models_path', ''))
+        if folder:
+            self.process_input.setText(folder)
+            self.save_config()
 
-    # Modified handle_archive_drop to reset preview index and update buttons
-    def handle_archive_drop(self, file_path):
-        self.last_archive_path = Path(file_path)
-        archive_name = self.last_archive_path.stem
-        self.model_name = archive_name
-        self.label.setText(f"Processing archive: {archive_name}")
+    def remove_quotes_from_path(self, text):
+        """Remove quotes from the beginning and end of a path string"""
+        if text.startswith('"') and text.endswith('"'):
+            return text[1:-1]
+        return text
 
-        directory = self.last_archive_path.parent
-        self.refresh_model_list(directory)
-        
-        if not self.model_list:
-            self.label.setText("No more models to recognize")
-            self.image_label.clear()
-            self.last_archive_path = None
-            self.preview_files = []
-            self.main_preview = None
-            self.current_model_index = -1
-            self.current_preview_index = 0  # Reset
-            self.back_button.setEnabled(False)
-            self.next_button.setEnabled(False)
-            self.check_button.setEnabled(False)
-            self.non_button.setEnabled(False)
-            self.thrash_button.setEnabled(False)
-            self.update_preview_buttons()  # Update new buttons
-            return
-
-        self.current_model_index = self.model_list.index(self.last_archive_path) if self.last_archive_path in self.model_list else 0
-        self.preview_files = [
-            f for f in directory.glob(f"{self.model_name}*")
-            if f.suffix.lower() in ('.jpg', '.jpeg', '.webp', '.png') and f.is_file()
-        ]
-        
-        self.next_button.setEnabled(len(self.model_list) > 1)
-        self.back_button.setEnabled(len(self.model_list) > 1)
-        self.check_button.setEnabled(True)
-        self.non_button.setEnabled(True)
-        self.thrash_button.setEnabled(True)
-
-        if self.preview_files:
-            self.preview_files.sort(key=lambda x: x.name)
-            self.main_preview = self.preview_files[0]
-            self.current_preview_index = 0  # Reset to first preview
-            prev, curr, nxt = self.get_model_names()
-            self.label.setText(f" {curr}")
-            self.display_image(self.main_preview)
-            self.update_preview_buttons()  # Update new buttons
-        else:
-            self.main_preview = None
-            self.current_preview_index = 0  # Reset
-            self.image_label.clear()
-            self.label.setText(f"No previews found for {archive_name}")
-            self.update_preview_buttons()  # Update new buttons
-
-        search_query = self.sanitize_search_string(archive_name)
-        search_url = f"https://3dsky.org/3dmodels?query={quote(search_query)}"
-        print(f"Loading search URL in web view: {search_url}")
-        self.web_view.setUrl(QUrl(search_url))
-        self.update_history(search_url)
-
-    # Modified handle_image_drop to reset preview index and update buttons
-    def handle_image_drop(self, file_path):
-        image_path = Path(file_path)
-        self.current_image_path = image_path
-        directory = image_path.parent
-        image_base_name = image_path.stem.rsplit(maxsplit=1)[0]
-        self.model_name = image_base_name.strip()
-        self.label.setText(f"Processing image: {image_path.name}")
-
-        self.refresh_model_list(directory)
-        
-        matching_archives = [
-            f for f in directory.glob(f"{image_base_name}*") 
-            if f.suffix.lower() in ('.rar', '.zip', '.7z') and f.is_file()
-        ]
-        
-        if matching_archives:
-            self.last_archive_path = matching_archives[0]
-            self.model_name = self.last_archive_path.stem
-            self.main_preview = image_path
-            self.preview_files = [image_path]
-            other_previews = [
-                f for f in directory.glob(f"{self.model_name}*")
-                if f.suffix.lower() in ('.jpg', '.jpeg', '.webp', '.png') 
-                and f.is_file() 
-                and f != image_path
-            ]
-            self.preview_files.extend(other_previews)
-            self.current_model_index = (
-                self.model_list.index(self.last_archive_path) 
-                if self.last_archive_path in self.model_list 
-                else 0
-            )
-        else:
-            self.last_archive_path = None
-            self.main_preview = image_path
-            self.preview_files = [image_path]
-            self.current_model_index = -1
-            self.label.setText(f"No matching archive found for: {image_base_name}")
-
-        self.current_preview_index = 0  # Reset to first preview
-        has_archive = self.last_archive_path is not None
-        self.check_button.setEnabled(has_archive)
-        self.non_button.setEnabled(has_archive)
-        self.thrash_button.setEnabled(has_archive)
-        self.next_button.setEnabled(len(self.model_list) > 1)
-        self.back_button.setEnabled(len(self.model_list) > 1)
-        self.update_preview_buttons()  # Update new buttons
-
-        self.display_image(self.main_preview)
-        
-        prev, curr, nxt = self.get_model_names()
-        self.label.setText(f" {curr}")
-
-        search_query = self.sanitize_search_string(self.model_name)
-        search_url = f"https://3dsky.org/3dmodels?query={quote(search_query)}"
-        self.web_view.setUrl(QUrl(search_url))
-        self.update_history(search_url)
-
-    # Modified go_back to reset preview index and update buttons
-    def go_back(self):
-        if not self.model_list:
-            self.label.setText("No models available to display")
-            return
-        
-        valid_models = [m for m in self.model_list if not self.sky_regex.match(m.name)]
-        if not valid_models:
-            self.label.setText("No more models to recognize")
-            self.image_label.clear()
-            self.last_archive_path = None
-            self.preview_files = []
-            self.main_preview = None
-            self.current_model_index = -1
-            self.current_preview_index = 0  # Reset
-            self.back_button.setEnabled(False)
-            self.next_button.setEnabled(False)
-            self.check_button.setEnabled(False)
-            self.non_button.setEnabled(False)
-            self.thrash_button.setEnabled(False)
-            self.update_preview_buttons()  # Update new buttons
-            return
-        
-        if self.current_model_index < 0 or self.current_model_index >= len(self.model_list):
-            self.current_model_index = len(self.model_list) - 1
-        
-        self.current_model_index = (self.current_model_index - 1) % len(self.model_list)
-        
-        loops = 0
-        while (self.sky_regex.match(self.model_list[self.current_model_index].name) and 
-               loops < len(self.model_list)):
-            self.current_model_index = (self.current_model_index - 1) % len(self.model_list)
-            loops += 1
-        
-        if loops >= len(self.model_list):
-            self.label.setText("No more models to recognize")
-            self.image_label.clear()
-            self.last_archive_path = None
-            self.preview_files = []
-            self.main_preview = None
-            self.current_model_index = -1
-            self.current_preview_index = 0  # Reset
-            self.back_button.setEnabled(False)
-            self.next_button.setEnabled(False)
-            self.check_button.setEnabled(False)
-            self.non_button.setEnabled(False)
-            self.thrash_button.setEnabled(False)
-            self.update_preview_buttons()  # Update new buttons
-            return
-        
-        next_model_path = self.model_list[self.current_model_index]
-        self.last_archive_path = next_model_path
-        self.model_name = next_model_path.stem
-        
-        directory = self.last_archive_path.parent
-        self.preview_files = [
-            f for f in directory.glob(f"{self.model_name}*")
-            if f.suffix.lower() in ('.jpg', '.jpeg', '.webp', '.png') and f.is_file()
-        ]
-        
-        if self.preview_files:
-            self.preview_files.sort(key=lambda x: x.name)
-            self.main_preview = self.preview_files[0]
-            self.current_preview_index = 0  # Reset to first preview
-            prev, curr, nxt = self.get_model_names()
-            self.label.setText(f" {curr}")
-            self.display_image(self.main_preview)
-            self.update_preview_buttons()  # Update new buttons
-        else:
-            self.main_preview = None
-            self.current_preview_index = 0  # Reset
-            self.image_label.clear()
-            self.label.setText(f"No previews found for model: {self.model_name}")
-            self.update_preview_buttons()  # Update new buttons
-        
-        self.back_button.setEnabled(len(valid_models) > 1)
-        self.next_button.setEnabled(len(valid_models) > 1)
-        self.check_button.setEnabled(True)
-        self.non_button.setEnabled(True)
-        self.thrash_button.setEnabled(True)
-        
-        search_query = self.sanitize_search_string(self.model_name)
-        search_url = f"https://3dsky.org/3dmodels?query={quote(search_query)}"
-        print(f"Loading previous model URL: {search_url}")
-        self.web_view.setUrl(QUrl(search_url))
-        self.update_history(search_url)
-
-    # Modified display_next_model to reset preview index and update buttons
-    def display_next_model(self):
-        if not self.model_list:
-            self.label.setText("No models available to display")
-            return
-        
-        valid_models = [m for m in self.model_list if not self.sky_regex.match(m.name)]
-        if not valid_models:
-            self.label.setText("No more models to recognize")
-            self.image_label.clear()
-            self.last_archive_path = None
-            self.preview_files = []
-            self.main_preview = None
-            self.current_model_index = -1
-            self.current_preview_index = 0  # Reset
-            self.back_button.setEnabled(False)
-            self.next_button.setEnabled(False)
-            self.check_button.setEnabled(False)
-            self.non_button.setEnabled(False)
-            self.thrash_button.setEnabled(False)
-            self.update_preview_buttons()  # Update new buttons
-            return
-        
-        if self.current_model_index < 0 or self.current_model_index >= len(self.model_list):
-            self.current_model_index = 0
-        
-        self.current_model_index = (self.current_model_index + 1) % len(self.model_list)
-        
-        loops = 0
-        while (self.sky_regex.match(self.model_list[self.current_model_index].name) and 
-               loops < len(self.model_list)):
-            self.current_model_index = (self.current_model_index + 1) % len(self.model_list)
-            loops += 1
-        
-        if loops >= len(self.model_list):
-            self.label.setText("No more models to recognize")
-            self.image_label.clear()
-            self.last_archive_path = None
-            self.preview_files = []
-            self.main_preview = None
-            self.current_model_index = -1
-            self.current_preview_index = 0  # Reset
-            self.back_button.setEnabled(False)
-            self.next_button.setEnabled(False)
-            self.check_button.setEnabled(False)
-            self.non_button.setEnabled(False)
-            self.thrash_button.setEnabled(False)
-            self.update_preview_buttons()  # Update new buttons
-            return
-        
-        next_model_path = self.model_list[self.current_model_index]
-        self.last_archive_path = next_model_path
-        self.model_name = next_model_path.stem
-        
-        directory = self.last_archive_path.parent
-        self.preview_files = [
-            f for f in directory.glob(f"{self.model_name}*")
-            if f.suffix.lower() in ('.jpg', '.jpeg', '.png', '.webp') and f.is_file()
-        ]
-        
-        if self.preview_files:
-            self.preview_files.sort(key=lambda x: x.name)
-            self.main_preview = self.preview_files[0]
-            self.current_preview_index = 0  # Reset to first preview
-            prev, curr, nxt = self.get_model_names()
-            self.label.setText(f" {curr}")
-            self.display_image(self.main_preview)
-            self.update_preview_buttons()  # Update new buttons
-        else:
-            self.main_preview = None
-            self.current_preview_index = 0  # Reset
-            self.image_label.clear()
-            self.label.setText(f"No previews found for model: {self.model_name}")
-            self.update_preview_buttons()  # Update new buttons
-        
-        self.back_button.setEnabled(len(valid_models) > 1)
-        self.next_button.setEnabled(len(valid_models) > 1)
-        self.check_button.setEnabled(True)
-        self.non_button.setEnabled(True)
-        self.thrash_button.setEnabled(True)
-        
-        search_query = self.sanitize_search_string(self.model_name)
-        search_url = f"https://3dsky.org/3dmodels?query={quote(search_query)}"
-        print(f"Loading next model URL: {search_url}")
-        self.web_view.setUrl(QUrl(search_url))
-        self.update_history(search_url)
-
-    def convert_to_preview_url(self, thumbnail_url):
-        if "sky_model_new_thumb_ang" in thumbnail_url:
-            return thumbnail_url.replace("sky_model_new_thumb_ang", "tuk_model_custom_filter_ang_en")
-        return None
-    
-    def download_image(self, image_url):
-        max_attempts = 2
-        for attempt in range(max_attempts):
-            try:
-                response = requests.get(image_url, timeout=10)
-                if response.status_code == 200:
-                    file_name = urlparse(image_url).path.split("/")[-1] or "preview_image.jpg"
-                    save_dir = self.last_archive_path.parent if self.last_archive_path else Path.cwd()
-                    save_path = save_dir / file_name
-                    with open(save_path, "wb") as f:
-                        f.write(response.content)
-                    print(f"Image downloaded as: {save_path}")
-                    self.label.setText(f"Preview image downloaded: {file_name}")
-                    self.display_image(save_path)
-                    return save_path
-                else:
-                    if attempt == max_attempts - 1:  # Last attempt
-                        self.label.setText("Failed to download preview image after retries")
-                        return None
-                    print(f"Attempt {attempt + 1} failed with status code: {response.status_code}")
-                    time.sleep(1)  # Small delay before retry
-            except Exception as e:
-                if attempt == max_attempts - 1:  # Last attempt
-                    print(f"Error downloading image after retries: {e}")
-                    self.label.setText("Error downloading preview image")
-                    return None
-                print(f"Attempt {attempt + 1} failed with error: {e}")
-                time.sleep(1)  # Small delay before retry
-        return None  # Fallback return if all attempts fail
-    
-    def _remove_old_previews(self, model_name, exclude_path=None):
-        """Remove all previews for a model except the excluded path."""
-        directory = self.last_archive_path.parent if self.last_archive_path else Path.cwd()
-        for old_preview in directory.glob(f"{model_name}*"):
-            if old_preview.suffix.lower() in ('.jpg', '.jpeg', '.png', '.webp'):
-                if exclude_path and old_preview.samefile(exclude_path):
-                    continue  # Skip the new image we're keeping
-                old_preview.unlink()  # Delete the file
-                print(f"Removed old preview: {old_preview}")
+    def run_sky_sorter(self):
+        """Run the SkySorter process."""
+        logger.debug("Running sky sorter")
+        try:
+            unprocessed_path = self.process_input.text()
+            sky_bank_path = self.folder_input1.text()
+            alias = ''
+            if hasattr(self, 'button_set'):
+                try:
+                    alias = self.button_set.get_alias()
+                except Exception as e:
+                    logger.error(f"Error getting alias: {str(e)}\n{traceback.format_exc()}")
+            
+            if not unprocessed_path:
+                self.console_output.append("Error: Please select an unprocessed folder path first")
+                return
+            
+            if not self.sky_sorter_script.exists():
+                self.console_output.append(f"Error: skySorter.py not found at {self.sky_sorter_script}")
+                return
                 
-    # Modified handle_webpage_element_drop to reset preview index and update buttons
-    def handle_webpage_element_drop(self, mime_data):
-        html = mime_data.html()
-        img_match = re.search(r'<img[^>]+src=["\'](.*?)["\']', html, re.IGNORECASE)
-        if not img_match:
-            self.label.setText("No image found in HTML")
-            return
-
-        thumbnail_url = img_match.group(1)
-        preview_url = self.convert_to_preview_url(thumbnail_url)
-        if not preview_url:
-            self.label.setText("Could not convert to preview URL")
-            return
-
-        downloaded_file = self.download_image(preview_url)
-        if not downloaded_file:
-            return
-
-        new_model_id = downloaded_file.stem
-
-        if self.last_archive_path and self.model_name:
-            directory = self.last_archive_path.parent
-            old_previews = [
-                f for f in directory.glob(f"{self.model_name}*")
-                if f.suffix.lower() in ('.jpg', '.jpeg', '.png', '.webp') and f.is_file()
-                and not f.samefile(downloaded_file)
-            ]
-            for old_preview in old_previews:
-                hash_result = self.combined_hash(old_preview, model_id=new_model_id)
-                if not hash_result.startswith("Error"):
-                    print(f"Stored hash {hash_result} for {old_preview} under model_id {new_model_id}")
-                else:
-                    print(f"Failed to hash {old_preview}: {hash_result}")
-
-        if self.last_archive_path and self.model_name:
-            self._remove_old_previews(self.model_name, exclude_path=downloaded_file)
-
-        self.preview_files = [downloaded_file]
-        self.main_preview = downloaded_file
-        self.current_preview_index = 0  # Reset to first preview
-        self.display_image(downloaded_file)
-        self.label.setText(f"New preview set: {downloaded_file.name}")
-        self.update_preview_buttons()  # Update new buttons
-
-        if self.last_archive_path and self.model_name:
-            self.rename_files(downloaded_file)
-
-        self.display_next_model()
-
-    def combined_hash(self, image_path, model_id=None):
-        """
-        Generate a combined pHash and dHash for the given image and store it in _Skynized.ftprnt.
-        If the file is inaccessible, fail silently. Use a backup file to handle corruption.
-        
-        Args:
-            image_path (str or Path): Path to the image file.
-            model_id (str, optional): Model ID to associate with the hash. Defaults to filename.
+            self.console_output.clear()
             
-        Returns:
-            str: Combined hash or error message.
-        """
-        image_path = str(image_path)  # Ensure it's a string
-        valid_extensions = ('.jpg', '.jpeg', '.webp', '.png', '.bmp')
-        if not any(image_path.lower().endswith(ext) for ext in valid_extensions):
-            return f"Error: Invalid image file extension. Got: {image_path}"
-
-        if not os.path.exists(image_path):
-            return f"Error: File not found: {image_path}"
-
-        try:
-            with Image.open(image_path) as img:
-                if img.mode != 'RGB':
-                    img = img.convert('RGB')
-                phash = str(imagehash.phash(img, hash_size=16))
-                dhash = str(imagehash.dhash(img, hash_size=16))
-                combined = f"{phash}_{dhash}"
+            self.console_output.append(f"Launching: Python with {self.sky_sorter_script} {unprocessed_path}")
+            if sky_bank_path:
+                self.console_output.append(f"Sky bank path provided: {sky_bank_path}")
+            if alias and alias.strip() != "patreon alias...":
+                self.console_output.append(f"Alias provided: {alias}")
+            
+            self.process.setWorkingDirectory(str(self.app_dir))
+            
+            program = str(sys.executable)
+            arguments = [str(self.sky_sorter_script), unprocessed_path]
+            
+            if sky_bank_path:
+                arguments.append(sky_bank_path)
+            
+            if alias and alias.strip() != "patreon alias...":
+                arguments.append(alias)
+            
+            self.process.start(program, arguments)
+            
         except Exception as e:
-            return f"Error processing image: {e}"
+            logger.error(f"Error running SkySorter: {str(e)}\n{traceback.format_exc()}")
+            self.console_output.append(f"Error running SkySorter: {str(e)}")
 
-        # Define the target file paths
-        ftprnt_file = r"R:\!_3DSKY_DATA\!_Fooprints\_Skynized.ftprnt"
-        backup_file = r"R:\!_3DSKY_DATA\!_Fooprints\_Skynized.ftprnt.bak"
-
-        # Check if the target directory is accessible
-        ftprnt_dir = os.path.dirname(ftprnt_file)
-        if not os.path.isdir(ftprnt_dir):
-            print(f"Directory not accessible, skipping hash storage: {ftprnt_dir}")
-            return combined
-
-        # Use provided model_id or fallback to filename
-        model_id = model_id or os.path.basename(image_path)
+    def run_skylister(self):
+        sky_bank_path = self.folder_input1.text()
         
-        # Load existing data, try backup if primary file is corrupted
-        data = {}
-        if os.path.exists(ftprnt_file):
-            try:
-                with open(ftprnt_file, 'r') as f:
-                    data = json.load(f)
-            except json.JSONDecodeError:
-                print(f"Primary ftprnt file corrupted, attempting to load backup: {ftprnt_file}")
-                if os.path.exists(backup_file):
-                    try:
-                        with open(backup_file, 'r') as f:
-                            data = json.load(f)
-                        print(f"Successfully loaded backup: {backup_file}")
-                    except json.JSONDecodeError:
-                        print(f"Backup file also corrupted, starting fresh: {backup_file}")
-                        data = {}
-                else:
-                    print(f"No backup file found, starting fresh: {backup_file}")
-                    data = {}
-        
-        # Create a backup of the current ftprnt file if it exists
-        if os.path.exists(ftprnt_file):
-            try:
-                shutil.copy2(ftprnt_file, backup_file)
-                print(f"Created backup: {backup_file}")
-            except Exception as e:
-                print(f"Failed to create backup, skipping hash storage: {e}")
-                return combined
-        
-        # Store the hash with the model_id
-        data[combined] = model_id
-        
-        # Write updated data to ftprnt file
-        try:
-            with open(ftprnt_file, 'w') as f:
-                json.dump(data, f, indent=4)
-            print(f"Stored hash {combined} for {model_id} in {ftprnt_file}")
-        except Exception as e:
-            print(f"Failed to write to ftprnt file, skipping hash storage: {e}")
-        
-        return combined
-    
-    def load_credentials(self):
-        """Load sky_user and sky_pass from config."""
-        credentials = {"email": "", "password": ""}
-        credentials["email"] = self.config.get("sky_user", "")
-        credentials["password"] = self.config.get("sky_pass", "")
-        return credentials
-    
-    def save_credentials(self, email, password):
-        """Save sky_user and sky_pass to sssuite.cfg."""
-        try:
-            # Update config with new credentials
-            self.config["sky_user"] = email
-            self.config["sky_pass"] = password
-            # Save updated config
-            with open(self.config_path, "w", encoding="utf-8") as f:
-                json.dump(self.config, f, indent=4)
-            print(f"Credentials saved to {self.config_path}")
-            self.label.setText("Credentials saved successfully")
-        except Exception as e:
-            print(f"Error saving sssuite.cfg: {e}")
-            self.label.setText(f"Error saving credentials: {e}")
-
-    def prompt_credentials(self):
-        """Prompt user for email and password with themed dialogs."""
-        email_dialog = CredentialDialog(self, "Login Credentials", "Enter your 3dsky.org email:")
-        if email_dialog.exec() != QDialog.DialogCode.Accepted:
-            self.label.setText("Email input canceled")
-            return None, None
-        email = email_dialog.get_text().strip()
-        if not email:
-            self.label.setText("Email cannot be empty")
-            return None, None
-
-        password_dialog = CredentialDialog(self, "Login Credentials", "Enter your 3dsky.org password:")
-        if password_dialog.exec() != QDialog.DialogCode.Accepted:
-            self.label.setText("Password input canceled")
-            return None, None
-        password = password_dialog.get_text().strip()
-        if not password:
-            self.label.setText("Password cannot be empty")
-            return None, None
-
-        return email, password
-
-    def dragEnterEvent(self, event):
-        if event.mimeData().hasUrls() or event.mimeData().hasHtml():
-            event.acceptProposedAction()
-
-    def dropEvent(self, event):
-        mime_data = event.mimeData()
-        if mime_data.hasUrls() and not mime_data.hasHtml():
-            url = mime_data.urls()[0]
-            if url.isLocalFile():
-                file_path = url.toLocalFile()
-                if file_path.lower().endswith(('.rar', '.zip', '.7z')):
-                    self.handle_archive_drop(file_path)
-                elif file_path.lower().endswith(('.jpg', '.jpeg', '.webp', '.png')):
-                    self.handle_image_drop(file_path)
-                else:
-                    self.label.setText("Please drag a .rar, .zip, .7z, or image file (.jpg, .jpeg, '.webp', .png)")
-            else:
-                self.label.setText("Dropped URL is not a local file")
-        elif mime_data.hasHtml():
-            self.handle_webpage_element_drop(mime_data)
-        else:
-            self.label.setText("No usable data dropped")
-
-    def update_history(self, new_url):
-        if self.current_index < len(self.url_history) - 1:
-            self.url_history = self.url_history[:self.current_index + 1]
-        if not self.url_history or self.url_history[-1] != new_url:
-            self.url_history.append(new_url)
-            self.current_index = len(self.url_history) - 1
-        self.back_button.setEnabled(self.current_index > 0)
-
-    def open_login(self):
-        # Load credentials from login.cfg
-        self.credentials = self.load_credentials()
-        
-        # If credentials are missing or empty, prompt for them
-        if not self.credentials["email"] or not self.credentials["password"]:
-            email, password = self.prompt_credentials()
-            if email and password:
-                self.credentials["email"] = email
-                self.credentials["password"] = password
-                self.save_credentials(email, password)
-            else:
-                return  # Exit if credentials weren't provided
-
-        login_url = "https://3dsky.org/auth/login?referer_url=%2F"
-        self.web_view.setUrl(QUrl(login_url))
-        self.update_history(login_url)
-        self.web_view.loadFinished.connect(self.auto_fill_login)
-
-    def auto_fill_login(self, ok):
-        if ok and "login" in self.web_view.url().toString():
-            QTimer.singleShot(1000, self.fill_login_fields)
-        self.web_view.loadFinished.disconnect(self.auto_fill_login)
-
-    def fill_login_fields(self):
-        email = self.credentials["email"]
-        password = self.credentials["password"]
-        js_code = f"""
-            var emailField = document.getElementById('inputEmail');
-            var passwordField = document.getElementById('inputPassword');
-            emailField.value = '{email}';
-            passwordField.value = '{password}';
-            var inputEvent = new Event('input', {{ bubbles: true }});
-            emailField.dispatchEvent(inputEvent);
-            passwordField.dispatchEvent(inputEvent);
-            var changeEvent = new Event('change', {{ bubbles: true }});
-            emailField.dispatchEvent(changeEvent);
-            passwordField.dispatchEvent(changeEvent);
-            var loginButton = document.querySelector('button[type="submit"]');
-            if (loginButton && !loginButton.disabled) {{
-                loginButton.click();
-                console.log('Login button clicked');
-            }} else {{
-                console.log('Login button not found or still disabled');
-            }}
-        """
-        self.web_view.page().runJavaScript(js_code)
-        print(f"Filled login fields with email: {email} and attempted to click the login button")
-
-    def open_provarch(self):
-        patreon_url = "https://www.patreon.com/c/Provarch"
-        webbrowser.open(patreon_url)
-
-    def open_youtube(self):
-        provarch_ytube_url = "https://www.youtube.com/@provarch"
-        webbrowser.open(provarch_ytube_url)
-
-    def open_discord(self):
-        discord_url = "https://discord.gg/C7NJWgPCaH"
-        webbrowser.open(discord_url)
-
-    def open_tutorial(self):
-        skynizer_tuto_url = "https://www.youtube.com/watch?v=8xYhKv1t4Hw"
-        webbrowser.open(skynizer_tuto_url)
-
-    def refresh_model_list(self, directory):
-        """Refresh the model_list based on current directory contents."""
-        archive_extensions = ('.rar', '.zip', '.7z')
-        self.model_list = [
-            f for f in directory.glob("*")
-            if f.suffix.lower() in archive_extensions and f.is_file() and not self.sky_regex.match(f.name)
-        ]
-        self.model_list.sort(key=lambda x: x.name)
-        # Reset current_model_index if out of bounds
-        if self.current_model_index >= len(self.model_list):
-            self.current_model_index = max(0, len(self.model_list) - 1)
-        if self.current_model_index < 0 and self.model_list:
-            self.current_model_index = 0
-
-    def get_model_names(self):
-        if not self.model_list:
-            return "None", "None", "None"
-        
-        # Filter out files matching sky_regex
-        valid_models = [m for m in self.model_list if not self.sky_regex.match(m.name)]
-        if not valid_models:
-            return "None", "None", "None"
-        
-        # Adjust current_model_index to point to a valid model
-        if self.current_model_index < 0 or self.current_model_index >= len(self.model_list):
-            self.current_model_index = 0
-        
-        # Map original index to valid_models index
-        current_original = self.model_list[self.current_model_index]
-        try:
-            current_valid_index = valid_models.index(current_original)
-        except ValueError:
-            current_valid_index = 0 if valid_models else -1
-        
-        if current_valid_index == -1:
-            return "None", "None", "None"
-        
-        current_model = valid_models[current_valid_index].stem
-        prev_index = (current_valid_index - 1) % len(valid_models) if valid_models else 0
-        previous_model = valid_models[prev_index].stem if valid_models else "None"
-        next_index = (current_valid_index + 1) % len(valid_models) if valid_models else 0
-        next_model = valid_models[next_index].stem if valid_models else "None"
-        
-        return previous_model, current_model, next_model
-
-    def sanitize_search_string(self, search_str):
-        search_str = search_str.replace("3d-model>", "").replace("_", " ").replace("-", " ")
-        sanitized = " ".join(part for part in search_str.split() if part)
-        return sanitized
-
-    def display_image(self, image_path):
-        self.current_image_path = image_path
-        pixmap = QPixmap(str(image_path))
-        if not pixmap.isNull():
-            # Calculate overscan dimensions (110% of 512x512)
-            overscan_factor = 1.10  # 10% overscan
-            target_width = int(512 * overscan_factor)
-            target_height = int(512 * overscan_factor)
-
-            # Scale the pixmap with overscan, preserving aspect ratio
-            scaled_pixmap = pixmap.scaled(
-                target_width, target_height,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation
-            )
-
-            # Create a rectangle to crop the center of the scaled image to 512x512
-            cropped_pixmap = scaled_pixmap.copy(
-                (scaled_pixmap.width() - 512) // 2,  # x offset to center
-                (scaled_pixmap.height() - 512) // 2,  # y offset to center
-                512,  # width
-                512   # height
-            )
-            self.image_label.setPixmap(cropped_pixmap)
-        else:
-            self.image_label.clear()
-            self.label.setText(f"Failed to load image: {image_path.name}")
-        self.update_image()
-
-    def update_image(self):
-        if not self.current_image_path:
-            return
-        pixmap = QPixmap(str(self.current_image_path))
-        if not pixmap.isNull():
-            available_width = self.image_label.width()
-            available_height = self.image_label.height()
-            scaled_pixmap = pixmap.scaled(
-                available_width, available_height,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation
-            )
-            self.image_label.setPixmap(scaled_pixmap)
-            self.image_label.update()
-            self.setMinimumSize(800, 600)
-        else:
-            self.image_label.clear()
-            self.label.setText(f"Failed to load image: {self.current_image_path.name}")
-
-        
-            
-    def update_button_positions(self):
-        """Position the overlay buttons on the image."""
-        container_width = self.image_container_widget.width()
-        container_height = self.image_container_widget.height()
-        button_size = 30
-        margin = 10
-
-        # Position prev button on the left center
-        self.prev_preview_button.move(margin, (container_height - button_size) // 2)
-
-        # Position next button on the right center
-        self.next_preview_button.move(container_width - button_size - margin, (container_height - button_size) // 2)
-        
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self.update_image()
-        self.update_button_positions()  # Update button positions when resizing
-        if hasattr(self, 'resize_grip'):
-            self.resize_grip.show()
-
-    def rename_files(self, downloaded_file):
-        directory = self.last_archive_path.parent
-        new_base_name = downloaded_file.stem
-        new_archive_path = directory / f"{new_base_name}{self.last_archive_path.suffix}"
-        
-        # Rename archive
-        os.rename(self.last_archive_path, new_archive_path)
-        self.last_archive_path = new_archive_path
-        
-        # Rename the single remaining preview (downloaded_file)
-        new_preview_path = directory / f"{new_base_name}{downloaded_file.suffix}"
-        os.rename(downloaded_file, new_preview_path)
-        
-        # Update state
-        self.preview_files = [new_preview_path]
-        self.main_preview = new_preview_path
-        self.model_name = new_base_name
-        self.label.setText(f"Renamed to: {new_base_name}")
-
-    def open_archive(self):
-        if not self.last_archive_path or not self.last_archive_path.exists():
-            self.label.setText("No archive to open")
-            return
-        try:
-            if sys.platform == "win32":
-                os.startfile(self.last_archive_path)
-            elif sys.platform == "darwin":
-                subprocess.run(["open", self.last_archive_path])
-            else:
-                subprocess.run(["xdg-open", self.last_archive_path])
-            self.label.setText(f"Opened archive: {self.last_archive_path.name}")
-        except Exception as e:
-            self.label.setText(f"Failed to open archive: {e}")
-
-    def move_to_non_sky(self):
-        if not self.last_archive_path or not self.last_archive_path.exists():
-            self.label.setText("No archive to move")
+        if not sky_bank_path:
+            self.console_output.append("Error: Please select a Sky Bank folder path first")
             return
         
-        directory = self.last_archive_path.parent
-        non_sky_dir = directory / "__non-sky"
         try:
-            if not non_sky_dir.exists():
-                non_sky_dir.mkdir()
-            
-            new_archive_path = non_sky_dir / self.last_archive_path.name
-            shutil.move(str(self.last_archive_path), str(new_archive_path))
-            
-            for preview in self.preview_files:
-                if preview.exists():
-                    new_preview_path = non_sky_dir / preview.name
-                    shutil.move(str(preview), str(new_preview_path))
-            
-            self.label.setText(f"Moved {self.last_archive_path.name} and previews to __non-sky")
-            
-            # Refresh model_list after moving
-            self.refresh_model_list(directory)
-            
-            if not self.model_list:
-                self.label.setText("No more models to recognize")
-                self.image_label.clear()
-                self.last_archive_path = None
-                self.preview_files = []
-                self.main_preview = None
-                self.current_model_index = -1
-                self.back_button.setEnabled(False)
-                self.next_button.setEnabled(False)
-                self.check_button.setEnabled(False)
-                self.non_button.setEnabled(False)
-                self.thrash_button.setEnabled(False)
+            if not self.skylister_script.exists():
+                self.console_output.append(f"Error: Skylister script not found at {self.skylister_script}")
                 return
+                
+            self.console_output.clear()
             
-            # Adjust index and display next model
-            if self.current_model_index >= len(self.model_list):
-                self.current_model_index = len(self.model_list) - 1
-            self.display_next_model()
+            self.console_output.append(f"Launching: Python with {self.skylister_script} {sky_bank_path}")
+            
+            self.process.setWorkingDirectory(str(self.app_dir))
+            
+            program = str(sys.executable)
+            arguments = [str(self.skylister_script), sky_bank_path]
+            
+            self.process.start(program, arguments)
             
         except Exception as e:
-            self.label.setText(f"Failed to move files: {e}")
+            self.console_output.append(f"Error running Skylister: {str(e)}")
 
-    def move_to_thrash(self):
-        if not self.last_archive_path or not self.last_archive_path.exists():
-            self.label.setText("No archive to move")
-            return
-        
-        directory = self.last_archive_path.parent
-        thrash_dir = directory / "__thrash"
+    def process_finished(self, exit_code, exit_status):
+        if exit_code == 0:
+            self.console_output.append("\nProcess completed successfully.")
+        else:
+            self.console_output.append(f"\nProcess finished with exit_code: {exit_code}")
+
+    def kill_process(self):
+        if self.process and self.process.state() == QProcess.ProcessState.Running:
+            self.process.terminate()
+            self.console_output.append("Attempting to terminate SkySorter client process...")
+            
+            QTimer.singleShot(2000, lambda: self.check_and_kill_bridge())
+        else:
+            self.console_output.append("No running client process to kill.")
+            self.check_and_kill_bridge()
+
+    def check_and_kill_bridge(self):
+        if self.process and self.process.state() == QProcess.ProcessState.Running:
+            self.process.kill()
+            self.console_output.append("Client process forcibly killed.")
+
+        bridge_port = 8888
+        shutdown_acknowledged = False
         try:
-            if not thrash_dir.exists():
-                thrash_dir.mkdir()
-            
-            new_archive_path = thrash_dir / self.last_archive_path.name
-            shutil.move(str(self.last_archive_path), str(new_archive_path))
-            
-            for preview in self.preview_files:
-                if preview.exists():
-                    new_preview_path = thrash_dir / preview.name
-                    shutil.move(str(preview), str(new_preview_path))
-            
-            self.label.setText(f"Moved {self.last_archive_path.name} and previews to __thrash")
-            
-            # Refresh model_list after moving
-            self.refresh_model_list(directory)
-            
-            if not self.model_list:
-                self.label.setText("No more models to recognize")
-                self.image_label.clear()
-                self.last_archive_path = None
-                self.preview_files = []
-                self.main_preview = None
-                self.current_model_index = -1
-                self.back_button.setEnabled(False)
-                self.next_button.setEnabled(False)
-                self.check_button.setEnabled(False)
-                self.non_button.setEnabled(False)
-                self.thrash_button.setEnabled(False)
-                return
-            
-            # Adjust index and display next model
-            if self.current_model_index >= len(self.model_list):
-                self.current_model_index = len(self.model_list) - 1
-            self.display_next_model()
-            
-        except Exception as e:
-            self.label.setText(f"Failed to move files: {e}")
-
-    def show_quit_dialog(self, show_dialog=True):
-        """Show the quit confirmation dialog if show_dialog is True and close the application if accepted."""
-        if show_dialog:
-            dialog = ConfirmExitDialog(self)
-            if dialog.exec() == QDialog.DialogCode.Accepted:
-                self.close()
-        else:
-            self.close()
-            
-    def load_folder(self, folder_path):
-        """Load models from the specified folder and display the first one."""
-        directory = Path(folder_path)
-        self.refresh_model_list(directory)
-        
-        if not self.model_list:
-            self.label.setText("No more models to recognize")
-            self.image_label.clear()
-            self.last_archive_path = None
-            self.preview_files = []
-            self.main_preview = None
-            self.current_model_index = -1
-            self.back_button.setEnabled(False)
-            self.next_button.setEnabled(False)
-            self.check_button.setEnabled(False)
-            self.non_button.setEnabled(False)
-            self.thrash_button.setEnabled(False)
-            return
-        
-        # Load the first model
-        self.current_model_index = 0
-        self.last_archive_path = self.model_list[self.current_model_index]
-        self.model_name = self.last_archive_path.stem
-        
-        self.preview_files = [
-            f for f in directory.glob(f"{self.model_name}*")
-            if f.suffix.lower() in ('.jpg', '.jpeg', '.webp', '.png') and f.is_file()
-        ]
-        
-        if self.preview_files:
-            self.preview_files.sort(key=lambda x: x.name)
-            self.main_preview = self.preview_files[0]
-            prev, curr, nxt = self.get_model_names()
-            self.label.setText(f" {curr}")
-            self.display_image(self.main_preview)
-        else:
-            self.main_preview = None
-            self.image_label.clear()
-            self.label.setText(f"No previews found for model: {self.model_name}")
-        
-        # Enable navigation buttons if there are multiple models
-        self.back_button.setEnabled(len(self.model_list) > 1)
-        self.next_button.setEnabled(len(self.model_list) > 1)
-        self.check_button.setEnabled(True)
-        self.non_button.setEnabled(True)
-        self.thrash_button.setEnabled(True)
-        
-        # Load search URL in web view
-        search_query = self.sanitize_search_string(self.model_name)
-        search_url = f"https://3dsky.org/3dmodels?query={quote(search_query)}"
-        print(f"Loading first model URL: {search_url}")
-        self.web_view.setUrl(QUrl(search_url))
-        self.update_history(search_url)
-
-    def open_folder(self):
-        # Check if a model is already loaded (i.e., last_archive_path exists)
-        if self.last_archive_path and self.last_archive_path.parent.exists():
-            # Open the current folder in the system file explorer
-            folder_path = str(self.last_archive_path.parent)
-            try:
-                if sys.platform == "win32":
-                    os.startfile(folder_path)
-                elif sys.platform == "darwin":
-                    subprocess.run(["open", folder_path])
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(1)
+                s.connect(("127.0.0.1", bridge_port))
+                s.send("bridge_shutdown".encode())
+                response = s.recv(1024).decode()
+                if response == "bridge_closing":
+                    self.console_output.append("✅ Bridge shutdown command acknowledged.")
+                    shutdown_acknowledged = True
                 else:
-                    subprocess.run(["xdg-open", folder_path])
-                self.label.setText(f"Opened folder: {folder_path}")
-            except Exception as e:
-                self.label.setText(f"Failed to open folder: {e}")
+                    self.console_output.append(f"⚠️ Unexpected bridge response: {response}")
+        except ConnectionRefusedError:
+            self.console_output.append("ℹ️ No bridge detected on port 8888, assuming already terminated.")
             return
-        
-        # Prompt for a folder
-        folder_path = QFileDialog.getExistingDirectory(
-            self, 
-            "Select Folder with Model Archives", 
-            str(Path.cwd()),  # Default to current working directory
-            QFileDialog.Option.ShowDirsOnly
+        except Exception:
+            pass
+
+        if shutdown_acknowledged:
+            time.sleep(4)
+            retries = 3
+            for attempt in range(retries):
+                try:
+                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                        s.settimeout(2)
+                        s.connect(("127.0.0.1", bridge_port))
+                        s.close()
+                        self.console_output.append(f"⚠️ Bridge still running after shutdown command (attempt {attempt + 1}/{retries}).")
+                        if attempt == retries - 1:
+                            self.console_output.append("❌ Bridge failed to shut down gracefully.")
+                            self.force_kill_bridge()
+                        time.sleep(1)
+                except ConnectionRefusedError:
+                    self.console_output.append("✅ Bridge successfully shut down.")
+                    return
+                except Exception:
+                    pass
+
+    def force_kill_bridge(self):
+        # Placeholder for force killing bridge process if needed
+        pass
+
+    def check_process(self):
+        if self.process and self.process.state() == QProcess.ProcessState.Running:
+            self.process.kill()
+            self.console_output.append("Process forcibly killed.")
+        else:
+            self.console_output.append("Process has been terminated.")
+
+    def open_explorer(self, path):
+        if not path:
+            self.console_output.append("Error: No path specified")
+            return
+        try:
+            path_obj = Path(path)
+            if path_obj.exists():
+                os.startfile(str(path_obj))
+                time.sleep(0.1)
+                if path == self.process_input.text():
+                    self.resize_and_position_explorer_window(600, 900, "left")
+                else:
+                    self.resize_and_position_explorer_window(600, 900, "right")
+            else:
+                self.console_output.append(f"Error: Path does not exist: {path}")
+        except Exception as e:
+            self.console_output.append(f"Error opening explorer: {str(e)}")
+
+    def resize_and_position_explorer_window(self, width, height, position="right"):
+        try:
+            SW_RESTORE = 9
+            HWND_TOP = 0
+            SWP_SHOWWINDOW = 0x0040
+            
+            GetSystemMetrics = ctypes.windll.user32.GetSystemMetrics
+            screen_width = GetSystemMetrics(0)
+            screen_height = GetSystemMetrics(1)
+            
+            if position == "left":
+                x = 10
+            else:
+                x = screen_width - width - 10
+                
+            y = (screen_height - height) // 2
+            
+            hwnd = ctypes.windll.user32.FindWindowW("CabinetWClass", None)
+            
+            if hwnd:
+                ShowWindow = ctypes.windll.user32.ShowWindow
+                ShowWindow(hwnd, SW_RESTORE)
+                
+                SetWindowPos = ctypes.windll.user32.SetWindowPos
+                SetWindowPos(hwnd, HWND_TOP, x, y, width, height, SWP_SHOWWINDOW)
+            else:
+                def enum_windows_callback(hwnd, lParam):
+                    class_name = ctypes.create_unicode_buffer(256)
+                    ctypes.windll.user32.GetClassNameW(hwnd, class_name, 256)
+                    
+                    if class_name.value == "CabinetWClass":
+                        if ctypes.windll.user32.IsWindowVisible(hwnd):
+                            ShowWindow = ctypes.windll.user32.ShowWindow
+                            ShowWindow(hwnd, SW_RESTORE)
+                            
+                            SetWindowPos = ctypes.windll.user32.SetWindowPos
+                            SetWindowPos(hwnd, HWND_TOP, x, y, width, height, SWP_SHOWWINDOW)
+                            return False
+                    return True
+                
+                EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_int, ctypes.c_int)
+                ctypes.windll.user32.EnumWindows(EnumWindowsProc(enum_windows_callback), 0)
+        except Exception as e:
+            print(f"Error positioning explorer window: {str(e)}")
+
+    def handle_console_input(self, event, console):
+        if event.key() == Qt.Key.Key_Return or event.key() == Qt.Key.Key_Enter:
+            cursor = console.textCursor()
+            cursor.movePosition(cursor.MoveOperation.End)
+            
+            cursor.movePosition(cursor.MoveOperation.StartOfLine, cursor.MoveMode.KeepAnchor)
+            current_line = cursor.selectedText()
+            
+            if "Enter your choice (c/i/r):" in current_line:
+                current_input = current_line.split(":")[-1].strip()
+            else:
+                current_input = current_line.strip()
+            
+            if self.process and self.process.state() == QProcess.ProcessState.Running:
+                self.process.write(f"{current_input}\n".encode())
+                self.process.waitForBytesWritten()
+                
+                cursor.movePosition(cursor.MoveOperation.End)
+                cursor.insertText("\n")
+        else:
+            QTextEdit.keyPressEvent(console, event)
+
+    def handle_stdout(self):
+        """Handle stdout from the process and update usage limits."""
+        try:
+            data = self.process.readAllStandardOutput()
+            stdout = bytes(data).decode('utf-8', errors='replace')
+            cursor = self.console_output.textCursor()
+            cursor.movePosition(cursor.MoveOperation.End)
+            self.console_output.setTextCursor(cursor)
+            
+            uid_pattern = r"Usage limit: uid:([0-9a-f]{16}):"
+            usage_pattern = r"All-time usage: (\d+)/(\d+) requests"
+            monthly_usage_pattern = r"Monthly usage: (\d+)/(\d+) requests"
+            success_pattern = r"✅ Processed [^\s]+ successfully\."
+            
+            updated = False
+            for line in stdout.splitlines():
+                # Check if the line matches any suppressed regex pattern
+                is_suppressed = any(pattern.match(line) for pattern in self.suppressed_patterns)
+                
+                # Log suppressed messages to debug
+                if is_suppressed:
+                    logger.debug(f"Suppressed message: {line}")
+                
+                # Process the line for functional updates (UID, usage, etc.) regardless of suppression
+                uid_match = re.search(uid_pattern, line)
+                if uid_match and hasattr(self, 'button_set'):
+                    new_uid = uid_match.group(1)
+                    if new_uid != self.user_uid:
+                        self.user_uid = new_uid
+                        self.button_set.update_uid(self.user_uid)
+                        if not is_suppressed:
+                            self.console_output.append(f"Extracted UID: {self.user_uid}")
+                        updated = True
+                
+                usage_match = re.search(usage_pattern, line)
+                if usage_match and hasattr(self, 'usage_button'):
+                    current, total = map(int, usage_match.groups())
+                    self.current_usage = max(self.current_usage, current)
+                    self.total_usage = total
+                    self.usage_button.update_usage(line)
+                    updated = True
+                
+                monthly_match = re.search(monthly_usage_pattern, line)
+                if monthly_match and hasattr(self, 'usage_button'):
+                    current, total = map(int, monthly_match.groups())
+                    self.current_usage = max(self.current_usage, current)
+                    self.total_usage = total
+                    self.usage_button.update_usage(line)
+                    updated = True
+                
+                success_match = re.search(success_pattern, line)
+                if success_match and hasattr(self, 'usage_button'):
+                    self.current_usage += 1
+                    self.usage_button.update_usage(f"Monthly usage: {self.current_usage}/{self.total_usage} requests")
+                    updated = True
+                
+                # Display the line only if it is not suppressed
+                if not is_suppressed:
+                    self.console_output.insertPlainText(line + '\n')
+            
+            if updated:
+                self.save_config()
+            
+            cursor.movePosition(cursor.MoveOperation.End)
+            self.console_output.setTextCursor(cursor)
+            self.console_output.verticalScrollBar().setValue(
+                self.console_output.verticalScrollBar().maximum()
+            )
+        except Exception as e:
+            logger.error(f"Error in handle_stdout: {str(e)}\n{traceback.format_exc()}")
+            self.console_output.append(f"Error processing stdout: {str(e)}")
+
+            
+            cursor.movePosition(cursor.MoveOperation.End)
+            self.console_output.setTextCursor(cursor)
+            self.console_output.verticalScrollBar().setValue(
+                self.console_output.verticalScrollBar().maximum()
+            )
+        except Exception as e:
+            logger.error(f"Error in handle_stdout: {str(e)}\n{traceback.format_exc()}")
+            self.console_output.append(f"Error processing stdout: {str(e)}")
+
+
+    def handle_stderr(self):
+        data = self.process.readAllStandardError()
+        stderr = bytes(data).decode('utf-8', errors='replace')
+        cursor = self.console_output.textCursor()
+        cursor.movePosition(cursor.MoveOperation.End)
+        self.console_output.setTextCursor(cursor)
+        self.console_output.insertHtml(f'<span style="color: red;">{stderr}</span>')
+        self.console_output.verticalScrollBar().setValue(
+            self.console_output.verticalScrollBar().maximum()
         )
-        
-        if not folder_path:
-            self.label.setText("No folder selected")
+
+    def validate_and_run_sky_sorter(self):
+        if not self.process_input.text():
+            self.console_output.append("Error: Please select an unprocessed folder path first")
             return
-        
-        self.load_folder(folder_path)   
+        self.run_sky_sorter()
+
+    def copy_uid_to_clipboard(self, uid):
+        QApplication.clipboard().setText(uid)
+        self.console_output.append(f"UID '{uid}' copied to clipboard.")
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            if self.resize_grip.geometry().contains(event.position().toPoint()):
-                self.resizing = True
-            else:
+            widget = self.childAt(event.position().toPoint())
+            if not widget or not any(isinstance(widget, t) for t in (QPushButton, QToolButton, QLineEdit, QTextEdit)):
                 self.dragging = True
                 self.drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-            event.accept()
-
-    def mouseMoveEvent(self, event):
-        if self.resizing:
-            delta = event.globalPosition().toPoint() - self.pos()
-            self.resize(delta.x(), delta.y())
-        elif self.dragging and event.buttons() & Qt.MouseButton.LeftButton:
-            self.move(event.globalPosition().toPoint() - self.drag_position)
-        event.accept()
+                event.accept()
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             self.dragging = False
-            self.resizing = False
             event.accept()
         elif event.button() == Qt.MouseButton.RightButton:
-            self.show_quit_dialog(show_dialog=True)
+            dialog = ConfirmExitDialog(self)
+            
+            window_geometry = self.geometry()
+            dialog_geometry = dialog.geometry()
+            
+            center_x = window_geometry.x() + (window_geometry.width() - dialog_geometry.width()) // 2
+            center_y = window_geometry.y() + (window_geometry.height() - dialog_geometry.height()) // 2
+            
+            offset_x = -40
+            offset_y = -90
+            
+            dialog.move(center_x + offset_x, center_y + offset_y)
+            
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                self.close()
             event.accept()
 
-if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    window = DropWidget()
-    window.show()
-    sys.exit(app.exec())
+    def mouseMoveEvent(self, event):
+        if self.dragging and event.buttons() & Qt.MouseButton.LeftButton:
+            self.move(event.globalPosition().toPoint() - self.drag_position)
+            event.accept()
+
+    def closeEvent(self, event):
+        event.accept()

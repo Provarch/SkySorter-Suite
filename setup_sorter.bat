@@ -23,16 +23,20 @@ echo discord.py > requirements.txt
 echo imagehash >> requirements.txt
 echo piexif >> requirements.txt
 echo Pillow >> requirements.txt
-echo PyQt6 >> requirements.txt
-echo PyQt6-WebEngine >> requirements.txt
+echo PyQt6==6.7.0 >> requirements.txt
+echo pyqt6-webengine==6.7.0 >> requirements.txt
 echo py7zr >> requirements.txt
 echo pyexiv2 >> requirements.txt
 echo requests >> requirements.txt
 echo tkinterdnd2 >> requirements.txt
 
+
 echo Installing required dependencies...
 python -m pip install -r requirements.txt
 del requirements.txt
+echo Reinstalling webengine for skynizer...
+pip install PyQt6==6.7.0 PyQt6-WebEngine==6.7.0 --force-reinstall
+
 
 echo Creating SkySorter Suite desktop shortcut...
 powershell -Command "$WshShell = New-Object -ComObject WScript.Shell; $Shortcut = $WshShell.CreateShortcut(\"$([Environment]::GetFolderPath('Desktop'))\\SkySorter Suite.lnk\"); $Shortcut.TargetPath = 'pythonw.exe'; $Shortcut.Arguments = '\"%CD%\\_internal\\UI.pyw\"'; $Shortcut.IconLocation = '%CD%\\_internal\\_gfx\\UI.ico'; $Shortcut.WorkingDirectory = '%CD%'; $Shortcut.Save()"
