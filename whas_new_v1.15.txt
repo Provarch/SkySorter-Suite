@@ -1,4 +1,15 @@
 [whats_new]
+
+
+-------------------------------
+SkySorter Suite – Version 1.14
+-------------------------------
+*Improved compability for skynizer on win11
+*Updater now correctly parses the correct whats_new information
+
+
+
+
 -------------------------------
 SkySorter Suite – Version 1.14
 -------------------------------
