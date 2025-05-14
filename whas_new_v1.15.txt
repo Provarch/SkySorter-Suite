@@ -3,6 +3,9 @@
 -------------------------------
 SkySorter Suite – Version 1.15
 -------------------------------
+
+NOTE: for skynizer, you might have to re-run setup_sorter.bat
+on windows 11 systems.
 *Improved compability for skynizer on win11
 *Updater now correctly parses the correct whats_new information.
 -------------------------------
