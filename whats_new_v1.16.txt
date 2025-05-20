@@ -1,4 +1,5 @@
 [whats_new]
+
 -------------------------------
 SkySorter Suite – Version 1.16
 -------------------------------
@@ -9,8 +10,6 @@ SkySorter Suite – Version 1.16
 *UI: Improved crashing occur when move mouse from other windows to the ui (ui definitions)
 *Sky-lister:Faster at refreshing the sky bank contents, it now creates an extra ".paths" file for faster path determination
 *Sky-lister:Improved capability to read/parse  model_type, Cat/SubCat values 
-
-
 -------------------------------
 
 -------------------------------
