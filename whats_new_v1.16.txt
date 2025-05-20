@@ -4,11 +4,17 @@
 SkySorter Suite – Version 1.16
 -------------------------------
 *Connectivity: Uses multiple SSL methods suitable for users with VPN necessity
+
 *UI: Improved usage counter to better reflect the current usage.
+
 *UI: added team field but client does not send
+
 *UI: Improved Force kill, which will cause more gracefull exits then before
+
 *UI: Improved crashing occur when move mouse from other windows to the ui (ui definitions)
+
 *Sky-lister:Faster at refreshing the sky bank contents, it now creates an extra ".paths" file for faster path determination
+
 *Sky-lister:Improved capability to read/parse  model_type, Cat/SubCat values 
 -------------------------------
 
