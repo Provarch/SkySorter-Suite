@@ -4,16 +4,19 @@ SkySorter Suite – Version 1.20
 -------------------------------
 small fix before the new update. no new features in this one.
 -------------------------------
+
 -------------------------------
 SkySorter Suite – Version 1.19
 -------------------------------
 Updated bridge connectivity for broader network configurations
 -------------------------------
+
 -------------------------------
 SkySorter Suite – Version 1.17
 -------------------------------
 *Lister had one issue with defuselxml dependency, you can ignore if you dont use Lister at all.
 -------------------------------
+
 -------------------------------
 SkySorter Suite – Version 1.16
 -------------------------------
