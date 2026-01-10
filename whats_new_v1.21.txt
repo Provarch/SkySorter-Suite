@@ -1,6 +1,12 @@
 [whats_new]
 
 -------------------------------
+SkySorter Suite – Version 1.21
+-------------------------------
+Patreon updater start.
+-------------------------------
+
+-------------------------------
 SkySorter Suite – Version 1.20
 -------------------------------
 small fix before the new update. no new features in this one.
