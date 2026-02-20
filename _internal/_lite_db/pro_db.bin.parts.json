@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "kind": "chunked_file",
+  "target_file": "pro_db.bin",
+  "target_path": "_internal/_lite_db/pro_db.bin",
+  "total_bytes": 42657968,
+  "chunk_bytes": 8388608,
+  "parts": [
+    "pro_db.bin.part000",
+    "pro_db.bin.part001",
+    "pro_db.bin.part002",
+    "pro_db.bin.part003",
+    "pro_db.bin.part004",
+    "pro_db.bin.part005"
+  ],
+  "cause": "POST https://api.github.com/repos/Provarch/SkySorter-Suite/git/blobs failed HTTP 422: {'message': 'Sorry, your input was too large to process. Consider creating the blob in a local clone of the repository and then pushing it to GitHub.', 'documentation_url': 'https://docs.github.com/rest/git/blobs#create-a-blob', 'status': '422'}"
+}
