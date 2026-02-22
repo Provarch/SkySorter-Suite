@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "generated_utc": "2026-02-22T12:08:44Z",
+  "files": [
+    {
+      "name": "pro_db_1.bin",
+      "size": 8388608,
+      "sha": "b9407ac93471cb0f87939f985c9058d3b5a8d7dc"
+    },
+    {
+      "name": "pro_db_2.bin",
+      "size": 8388608,
+      "sha": "7f805d5957557f8e3bc2c0672783437e6d9b5bd2"
+    },
+    {
+      "name": "pro_db_3.bin",
+      "size": 8388608,
+      "sha": "728592b625dc5c3f23ea15a2f978b376e7c5215c"
+    },
+    {
+      "name": "pro_db_4.bin",
+      "size": 8388608,
+      "sha": "ba1ea167f3e1edd3453d69981c5e4883876e6fc7"
+    },
+    {
+      "name": "pro_db_5.bin",
+      "size": 8388608,
+      "sha": "0870c0b05f4f7b448fca39100cea527d5497d876"
+    },
+    {
+      "name": "pro_db_6.bin",
+      "size": 804548,
+      "sha": "4c4cab36882d7521dd7dc0576fe5853ba62549fe"
+    },
+    {
+      "name": "ofi_db.bin",
+      "size": 4489292,
+      "sha": "e1498473b9e8fa5798ec6aa676105451f8168028"
+    },
+    {
+      "name": "ex_db.bin",
+      "size": 42512,
+      "sha": "40ef1519cea042013af2ab47a77bea83affbe47f"
+    }
+  ]
+}
