@@ -1,46 +1,76 @@
 {
   "version": 1,
-  "generated_utc": "2026-05-14T21:33:45Z",
+  "generated_utc": "2026-05-15T21:19:57Z",
   "files": [
     {
-      "name": "pro_db_1.bin",
+      "name": "lite_db_1.bin",
       "size": 8388608,
-      "sha": "b9407ac93471cb0f87939f985c9058d3b5a8d7dc"
+      "sha": "c451749c71848c3b5bc385723a9a581a753cf692"
     },
     {
-      "name": "pro_db_2.bin",
+      "name": "lite_db_2.bin",
       "size": 8388608,
-      "sha": "7f805d5957557f8e3bc2c0672783437e6d9b5bd2"
+      "sha": "5f3d34fc0977f2937b42371077122646e7e108fd"
     },
     {
-      "name": "pro_db_3.bin",
+      "name": "lite_db_3.bin",
       "size": 8388608,
-      "sha": "728592b625dc5c3f23ea15a2f978b376e7c5215c"
+      "sha": "8a2271eb320ffa93115256fff6918bdd59f6f11c"
     },
     {
-      "name": "pro_db_4.bin",
+      "name": "lite_db_4.bin",
       "size": 8388608,
-      "sha": "ba1ea167f3e1edd3453d69981c5e4883876e6fc7"
+      "sha": "447f853e9de62668e289914fb7bf7e38eee42627"
     },
     {
-      "name": "pro_db_5.bin",
+      "name": "lite_db_5.bin",
       "size": 8388608,
-      "sha": "6fba7470ea6eb17f50a30d56560fa01297101d37"
+      "sha": "87eaa3c67d28942c182756ae798c4020f953d818"
     },
     {
-      "name": "pro_db_6.bin",
-      "size": 2716760,
-      "sha": "ae561dd38629d0710bb5408cbd524566a81639bd"
+      "name": "lite_db_6.bin",
+      "size": 8388608,
+      "sha": "4ea0f0b9a83b9b87714d70c3fc87c640f073b197"
     },
     {
-      "name": "ofi_db.bin",
-      "size": 4604096,
-      "sha": "24038f1a7e4993d1210497e4a9f1949002a68d23"
+      "name": "lite_db_7.bin",
+      "size": 8388608,
+      "sha": "0efc5aa2403f7212c781f16afc6f7cb4b8c02f1a"
     },
     {
-      "name": "ex_db.bin",
-      "size": 42644,
-      "sha": "4178a1153cf4794792b1e3f401e950bb51c29a1c"
+      "name": "lite_db_8.bin",
+      "size": 8388608,
+      "sha": "71ade567080bad599950fa4d1b08583e97876ebd"
+    },
+    {
+      "name": "lite_db_9.bin",
+      "size": 8388608,
+      "sha": "cfe54d5a8b3df2e2d4507244609e154670275185"
+    },
+    {
+      "name": "lite_db_10.bin",
+      "size": 8388608,
+      "sha": "faa35c54b449b2f3b8fbc5331fbe89240360dbc7"
+    },
+    {
+      "name": "lite_db_11.bin",
+      "size": 8388608,
+      "sha": "958324a3070560c0229054a11f685c2b928486b5"
+    },
+    {
+      "name": "lite_db_12.bin",
+      "size": 8388608,
+      "sha": "c8722a43a3c4458acd82381f91126931c6d57aa7"
+    },
+    {
+      "name": "lite_db_13.bin",
+      "size": 8388608,
+      "sha": "0835429e37124f74747dc3ac23e56b3f4e51f338"
+    },
+    {
+      "name": "lite_db_14.bin",
+      "size": 6072196,
+      "sha": "a3794b310670c3f139de05472cc3f4bb23b971dd"
     }
   ]
 }
