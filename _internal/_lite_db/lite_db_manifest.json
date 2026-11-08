@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated_utc": "2026-11-07T21:22:22Z",
+  "generated_utc": "2026-11-08T21:14:31Z",
   "files": [
     {
       "name": "lite_db_1.bin",
@@ -79,8 +79,8 @@
     },
     {
       "name": "lite_db_16.bin",
-      "size": 2442612,
-      "sha": "3db1592cdf535dfa96b3b3fe0470db993249f68b"
+      "size": 2526220,
+      "sha": "42a67d01e3475876be454211637e7fa0c49ca54f"
     }
   ]
 }
